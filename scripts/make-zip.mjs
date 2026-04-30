@@ -1,8 +1,7 @@
 import { spawnSync } from "node:child_process"
-import { dirname, join } from "node:path"
-import { fileURLToPath } from "node:url"
+import { readFileSync } from "node:fs"
 
-const root = dirname(dirname(fileURLToPath(import.meta.url)))
-const out = join(dirname(root), "opencode-loop-like-claude.zip")
-const result = spawnSync("zip", ["-r", out, ".", "-x", "*.git*"], { cwd: root, stdio: "inherit" })
-process.exit(result.status || 0)
+const pkg = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8"))
+const name = `${pkg.name}-v${pkg.version}.zip`
+const result = spawnSync("zip", ["-r", name, ".", "-x", "*.git*", "node_modules/*"], { stdio: "inherit" })
+process.exit(result.status ?? 0)

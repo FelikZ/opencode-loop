@@ -1,55 +1,37 @@
 # Changelog
 
+## 0.4.0
+
+- Public repository metadata updated for `ByBrawe/opencode-loop`.
+- Package renamed to `opencode-loop`.
+- README rewritten in English for public GitHub discovery and SEO.
+- Added `--prompt-file` for long reusable prompts.
+- Added `--include-file` for extra context files.
+- Added `--max-runtime` for total runtime limits.
+- Added `--max-failures` and `--pause-on-verify-fail` for failure control.
+- Added `--postrun` and `--notify` hooks.
+- Added `--dry-run` preview mode.
+- Added `/loop-doctor`, `/loop-init`, and `/loop-export` commands.
+- Improved max-runs finalization so the final run can still verify/checkpoint.
+- Improved state cleanup for non-assistant actions such as `/compact`.
+- Kept all examples project-neutral and English.
+
+## 0.3.1
+
+- Converted public examples to English.
+- Removed private/project-specific language from README.
+- Added public `progress.md` workflow examples.
+
 ## 0.3.0
 
-SEO/public release cleanup and new loop controls:
-
-- Renamed user-facing copy to **OpenCode Loop - Claude Code Style Auto-Continue for OpenCode**.
-- Removed Bybrawe branding from the README/title/package metadata so the repo targets OpenCode search terms.
-- Added `/loop-help`.
-- Added `/loop-logs`.
-- Added `--verify "<command>"` to run a real verification command after each assistant turn and feed failures into the next prompt.
-- Added `--preflight "<command>"` to run a command before each loop turn and pause on failure.
-- Added `--stop-file <file>` as a simple project-local kill switch.
-- Added `--progress-file <file>` to tell the agent which progress/TODO file to treat as primary.
-- Added `.opencode/opencode-loop/loop.log` event logging.
-- Renamed local plugin file to `opencode-loop.js`.
-- Renamed state directory to `.opencode/opencode-loop/`.
+- Added SEO-oriented README for OpenCode loop / Claude Code style loop use cases.
+- Added `/loop-help` and `/loop-logs`.
+- Added `--verify`, `--preflight`, `--stop-file`, and `--progress-file`.
 
 ## 0.2.0
 
-Added advanced loop controls:
-
-- `--max-runs`
-- `--timeout`
-- `--until`
-- `--no-overlap` / `--allow-overlap`
-- `--compact-every`
-- `--test`
-- `--checkpoint-only`
-- `--git-checkpoint`
-- `--branch`
-- `--safe`
-- `--batch`
-- `--quiet`
-- `--ask-never`
-- `--watch`
-- `/loop-remove`
-- `/loop-pause`
-- `/loop-resume`
-- `/loop-clear`
-- `/loop-dev`
-- `/loop-testfix`
-- `/loop-compact`
-- `/loop-progress`
-- `/loop-safe-dev`
+- Added max runs, timeout, until, compact scheduling, tests, checkpoints, branch setup, safe mode, batch mode, quiet mode, ask-never mode, watch mode, and preset commands.
 
 ## 0.1.0
 
-Initial release with:
-
-- `/loop`
-- `/loop-status`
-- `/loop-now`
-- `/loop-stop`
-- prompt, slash-command, compact and shell actions
+- Initial local OpenCode loop plugin.

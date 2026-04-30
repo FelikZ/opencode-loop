@@ -1,7 +1,7 @@
 {
-  "name": "opencode-loop-like-claude",
-  "version": "0.3.0",
-  "description": "Claude Code style /loop command for OpenCode: auto-continue, compact scheduling, progress.md TODO automation, verification commands, checkpoints and safe autonomous coding loops.",
+  "name": "opencode-loop",
+  "version": "0.4.0",
+  "description": "Claude Code style auto-continue /loop command for OpenCode: autonomous loops, compact scheduling, progress.md TODO automation, verification, checkpoints, and safe long-running coding sessions.",
   "type": "module",
   "main": "src/index.js",
   "exports": {
@@ -24,6 +24,7 @@
   "keywords": [
     "opencode",
     "opencode-plugin",
+    "opencode-loop",
     "claude-code",
     "claude-code-loop",
     "loop",
@@ -37,8 +38,16 @@
     "todo-automation",
     "ralph-loop"
   ],
-  "author": "OpenCode Loop Contributors",
+  "author": "ByBrawe",
   "license": "MIT",
+  "homepage": "https://github.com/ByBrawe/opencode-loop#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ByBrawe/opencode-loop.git"
+  },
+  "bugs": {
+    "url": "https://github.com/ByBrawe/opencode-loop/issues"
+  },
   "peerDependencies": {
     "@opencode-ai/plugin": ">=1.4.0"
   }
