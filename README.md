@@ -2,14 +2,18 @@
 
 **Claude Code style auto-continue for OpenCode.**
 
-OpenCode Loop adds a practical `/loop` command to OpenCode so an agent can keep working after each idle turn instead of waiting for you to type “continue” again. It is useful for long coding sessions, `progress.md` workflows, TODO automation, test-fix loops, periodic `/compact`, checkpoints, and safe autonomous development.
+OpenCode Loop adds a practical `/loop` command and `opencode-loopd` daemon to OpenCode so an agent can keep working after each idle turn instead of waiting for you to type “continue” again.
+
+It is useful for long coding sessions, `progress.md` workflows, TODO automation, test-fix loops, periodic `/compact`, checkpoints, safe autonomous development, and background OpenCode continuation jobs.
 
 Repository: **ByBrawe/opencode-loop**  
 NPM package name: **@bybrawe/opencode-loop**
 
 ## Why this exists
 
-Claude Code users often rely on a loop-like workflow where the agent finishes one step, then immediately continues with the next step. OpenCode is powerful, but long-running autonomous workflows usually need extra control around:
+Claude Code users often rely on a loop-like workflow where the agent finishes one step, then immediately continues with the next step.
+
+OpenCode is powerful, but long-running autonomous workflows usually need extra control around:
 
 - auto-continue after idle
 - compact / summarize scheduling
@@ -18,6 +22,8 @@ Claude Code users often rely on a loop-like workflow where the agent finishes on
 - patch checkpoints
 - maximum runtime limits
 - failure limits
+- background daemon execution
+- Windows Task Scheduler support
 - safety prompts and destructive command guards
 
 OpenCode Loop is designed for developers searching for:
@@ -32,16 +38,22 @@ OpenCode Loop is designed for developers searching for:
 - Claude Code style loop for OpenCode
 - autonomous coding loop for OpenCode
 - progress.md TODO automation for OpenCode
+- OpenCode background daemon
+- OpenCode loop daemon
+- OpenCode Windows Task Scheduler loop
 
 ## Features
 
-> Note: The TUI `/loop` command is session-bound. It runs while OpenCode is open and the session receives idle events. If the terminal closes, the machine sleeps, the process is killed, or the provider connection is lost for a long time, the TUI loop cannot continue in the background. For long-running loops, use `opencode-loopd` daemon mode.
-
+> The TUI `/loop` command is session-bound. It runs while OpenCode is open and the session receives idle/status events. If the terminal closes, the machine sleeps, the process is killed, or the provider connection is lost for a long time, the TUI loop cannot continue in the background. For long-running loops, use `opencode-loopd` daemon mode.
 
 - **Claude Code style auto-continue** with `/loop 0s ...`.
+- **TUI loop mode** with `/loop`, active while OpenCode is open.
 - **Background daemon mode** with `opencode-loopd` for long-running loops outside the OpenCode TUI.
+- **Windows Task Scheduler helper** with `opencode-loopd install-task`.
+- **One-shot scheduled runs** for periodic continuation jobs.
 - **Interval loops** for prompts, slash commands, and shell commands.
 - **Prompt-file support** with `--prompt-file loop-prompt.md` for long reusable instructions.
+- **Prompt-file daemon support** with `opencode-loopd --prompt-file loop-prompt.md`.
 - **Include extra context files** with `--include-file`.
 - **progress.md workflow** with `--progress-file progress.md`.
 - **Large TODO support** with `--batch`.
@@ -51,6 +63,8 @@ OpenCode Loop is designed for developers searching for:
 - **Post-run commands** with `--postrun`.
 - **Failure control** with `--max-failures` and `--pause-on-verify-fail`.
 - **Runtime control** with `--max-runtime 6h`.
+- **Run limit support** with `--max-runs`.
+- **Sleep-before-first-run support** with `--sleep-first`.
 - **Checkpoints** with `--checkpoint-only` or `--git-checkpoint`.
 - **Safe mode** with `--safe` and prompt-level destructive command warnings.
 - **Branch setup** with `--branch ai-loop`.
@@ -59,94 +73,6 @@ OpenCode Loop is designed for developers searching for:
 - **Diagnostics** with `/loop-doctor`.
 - **Starter progress file** with `/loop-init`.
 - **State export** with `/loop-export`.
-
-## Quick start
-
-```text
-/loop 0s continue from progress.md and implement the next unfinished TODO
-```
-
-This is the closest behavior to a Claude Code CLI style loop: every time OpenCode becomes idle, the loop can send the next continuation prompt.
-
-A safer development loop:
-
-```text
-/loop 0s --name dev --ask-never --safe --no-overlap --batch 5 --compact-every 200m --checkpoint-only --progress-file progress.md Treat progress.md as the main project state file. Continue with the next unfinished TODO, implement it, mark completed items with [x], add useful follow-up TODOs when you discover them, run tests/lint/build when available, and keep going while work remains.
-```
-
-Periodic compact:
-
-```text
-/loop 200m --name compact --no-now /compact
-```
-
-Test-fix loop:
-
-```text
-/loop 0s --name testfix --ask-never --safe --verify "npm test" Continue from progress.md. If tests fail, analyze the failure, fix it, and run the tests again.
-```
-
-Shell command loop:
-
-```text
-/loop 10m --name tests --safe !npm test
-```
-
-## Background daemon
-
-The `/loop` command is session-bound. It works while OpenCode is open and the current session emits idle/status events.
-
-If you close OpenCode, restart the terminal, lose connection, or your PC sleeps, the TUI loop will not keep running.
-
-For long-running loops, use the daemon:
-
-```bash
-opencode-loopd --project . --every 5m --prompt-file loop-prompt.md
-```
-
-Run immediately after each OpenCode turn:
-
-```bash
-opencode-loopd --project . --every 0s --prompt "continue from progress.md and implement the next unfinished TODO"
-```
-
-Limit runs:
-
-```bash
-opencode-loopd --project . --every 5m --max-runs 20 --prompt-file loop-prompt.md
-```
-
-Example `loop-prompt.md`:
-
-```md
-Continue from progress.md and implement the next unfinished TODO.
-
-Rules:
-- Do not ask questions.
-- Make reasonable assumptions.
-- Mark completed TODO items with [x].
-- Add useful follow-up TODOs when needed.
-- Run tests/lint/build when available.
-- Do not run destructive commands such as git reset, git clean, rm -rf, force push, deploy, or production migrations.
-- Keep going while work remains.
-```
-
-### Windows Task Scheduler
-
-You can create a Windows scheduled task that runs a one-shot daemon job every N minutes:
-
-```powershell
-opencode-loopd install-task --project "C:\path\to\project" --every 10m --prompt-file loop-prompt.md --name OpenCodeLoop
-```
-
-Remove it:
-
-```powershell
-opencode-loopd uninstall-task --name OpenCodeLoop
-```
-
-For active development, a visible terminal running `opencode-loopd --project . --every 0s ...` is easier to monitor.
-
 
 ## Installation
 
@@ -201,7 +127,12 @@ opencode-loopd --help
 
 ### Why `npx` is the recommended npm install
 
-OpenCode can load npm plugins from the `plugin` array in `opencode.json`, but OpenCode slash commands are discovered from command definitions such as markdown files in a `commands/` directory or command entries in config. The `npx` installer installs both parts: the plugin file and the `/loop-*` command files.
+OpenCode can load npm plugins from the `plugin` array in `opencode.json`, but OpenCode slash commands are discovered from command definitions such as markdown files in a `commands/` directory or command entries in config.
+
+The `npx` installer installs both parts:
+
+- the OpenCode plugin file
+- the `/loop-*` command markdown files
 
 Use the OpenCode config-only method only if you already installed the command files separately or you are only testing plugin loading.
 
@@ -216,7 +147,9 @@ If you want OpenCode to load the npm plugin package directly, add the scoped pac
 }
 ```
 
-Use the scoped package name exactly as shown. `opencode-loop` without `@bybrawe/` is a different npm package name.
+Use the scoped package name exactly as shown.
+
+`opencode-loop` without `@bybrawe/` is a different npm package name.
 
 If `/loop` does not appear after using only the config method, run the installer once:
 
@@ -290,37 +223,6 @@ copy .\src\index.js .opencode\plugins\opencode-loop.js
 copy .\commands\*.md .opencode\commands\
 ```
 
-<<<<<<< HEAD
-=======
-### npm install - after publishing `@bybrawe/opencode-loop`
-
-Do **not** use this section for a plain GitHub clone. This is only for the npm package.
-
-The npm package name is scoped:
-
-```text
-@bybrawe/opencode-loop
-```
-
-Recommended npm install command:
-
-```bash
-npx -y @bybrawe/opencode-loop
-```
-
-This copies the plugin file and all `/loop-*` markdown command files into your OpenCode config directory, then you restart OpenCode. This is the most reliable install path because OpenCode slash commands are discovered from command files.
-
-If you only want OpenCode to load the npm plugin package directly, add the scoped package name to your OpenCode config:
-
-```json
-{
-  "$schema": "https://opencode.ai/config.json",
-  "plugin": ["@bybrawe/opencode-loop"]
-}
-```
-
-
->>>>>>> 600c1cf8146d317efd682e20298f53c0cf2bf213
 ### Verify installation
 
 After restarting OpenCode, run:
@@ -336,6 +238,117 @@ If the commands do not appear:
 2. Check that `opencode-loop.js` exists in the OpenCode plugin directory.
 3. Check that `loop.md`, `loop-help.md`, and the other command files exist in the OpenCode commands directory.
 4. Run `npx -y @bybrawe/opencode-loop` again to reinstall the command files.
+
+## Quick start
+
+```text
+/loop 0s continue from progress.md and implement the next unfinished TODO
+```
+
+This is the closest behavior to a Claude Code CLI style loop: every time OpenCode becomes idle, the loop can send the next continuation prompt.
+
+A safer development loop:
+
+```text
+/loop 0s --name dev --ask-never --safe --no-overlap --batch 5 --compact-every 200m --checkpoint-only --progress-file progress.md Treat progress.md as the main project state file. Continue with the next unfinished TODO, implement it, mark completed items with [x], add useful follow-up TODOs when you discover them, run tests/lint/build when available, and keep going while work remains.
+```
+
+Periodic compact:
+
+```text
+/loop 200m --name compact --no-now /compact
+```
+
+Test-fix loop:
+
+```text
+/loop 0s --name testfix --ask-never --safe --verify "npm test" Continue from progress.md. If tests fail, analyze the failure, fix it, and run the tests again.
+```
+
+Shell command loop:
+
+```text
+/loop 10m --name tests --safe !npm test
+```
+
+## Background daemon
+
+The `/loop` command is session-bound. It works while OpenCode is open and the current session emits idle/status events.
+
+If you close OpenCode, restart the terminal, lose connection, or your PC sleeps, the TUI loop will not keep running.
+
+For long-running loops, use the daemon:
+
+```bash
+opencode-loopd --project . --every 5m --prompt-file loop-prompt.md
+```
+
+Run immediately after each OpenCode turn:
+
+```bash
+opencode-loopd --project . --every 0s --prompt "continue from progress.md and implement the next unfinished TODO"
+```
+
+Limit runs:
+
+```bash
+opencode-loopd --project . --every 5m --max-runs 20 --prompt-file loop-prompt.md
+```
+
+Wait before the first run:
+
+```bash
+opencode-loopd --project . --every 10m --sleep-first --prompt-file loop-prompt.md
+```
+
+Use an inline prompt:
+
+```bash
+opencode-loopd --project . --every 0s --prompt "continue from progress.md and implement the next unfinished TODO"
+```
+
+Example `loop-prompt.md`:
+
+```md
+Continue from progress.md and implement the next unfinished TODO.
+
+Rules:
+- Do not ask questions.
+- Make reasonable assumptions.
+- Mark completed TODO items with [x].
+- Add useful follow-up TODOs when needed.
+- Run tests/lint/build when available.
+- Do not run destructive commands such as git reset, git clean, rm -rf, force push, deploy, or production migrations.
+- Keep going while work remains.
+```
+
+## Windows Task Scheduler
+
+You can create a Windows scheduled task that runs a one-shot daemon job every N minutes.
+
+Install a scheduled task:
+
+```powershell
+opencode-loopd install-task --project "C:\path\to\project" --every 10m --prompt-file loop-prompt.md --name OpenCodeLoop
+```
+
+Remove it:
+
+```powershell
+opencode-loopd uninstall-task --name OpenCodeLoop
+```
+
+Check existing tasks:
+
+```powershell
+Get-ScheduledTask | Where-Object { $_.TaskName -like "*OpenCode*" }
+```
+
+For active development, a visible terminal running daemon mode is usually easier to monitor:
+
+```powershell
+opencode-loopd --project "C:\path\to\project" --every 0s --prompt-file loop-prompt.md
+```
 
 ## Multiple loops and duplicate protection
 
@@ -677,6 +690,12 @@ By default a new loop is due immediately. Use `--no-now` to wait for the first i
 /loop 0s --name dev --ask-never --safe --no-overlap --compact-every 20 --timeout 45m --max-runtime 6h --max-failures 3 --stop-file STOP_LOOP --checkpoint-only Continue from progress.md. Do not ask questions. Make reasonable assumptions. Complete TODOs in order, mark finished items with [x], add useful new ideas to progress.md, and keep going while work remains.
 ```
 
+### Daemon-based long-running development loop
+
+```bash
+opencode-loopd --project . --every 5m --prompt-file loop-prompt.md
+```
+
 ### Test-fix loop
 
 ```text
@@ -790,23 +809,34 @@ Improve the application in small safe steps.
 - None.
 ```
 
-## Bug fixes and hardening in v0.4.0
+## Changelog highlights
 
-- Renamed the public package/repo metadata to `opencode-loop` for `ByBrawe/opencode-loop`.
-- Replaced project-specific examples with public, English OpenCode examples.
-- Added `--prompt-file` for long prompts instead of huge command lines.
-- Added `--include-file` for extra context files.
-- Added `--max-runtime` so loops can stop after a total runtime.
-- Added `--max-failures` and `--pause-on-verify-fail` for failing verification loops.
-- Added `--postrun` and `--notify` hooks.
-- Added `/loop-doctor`, `/loop-init`, and `/loop-export`.
-- Fixed the max-runs/checkpoint ordering issue so the last run can still finalize and checkpoint.
-- Improved no-overlap behavior and state cleanup for non-assistant actions such as `/compact`.
-- Kept all README examples in English for public GitHub discovery.
+### v0.5.1
+
+- Cleaned up README installation docs.
+- Removed duplicate npm install section.
+- Removed unresolved merge conflict markers.
+- Added clearer daemon mode documentation.
+- Added Windows Task Scheduler examples.
+- Added daemon usage examples for `--every`, `--max-runs`, `--sleep-first`, and `--prompt-file`.
+
+### v0.5.0
+
+- Added `opencode-loopd` background daemon.
+- Added Windows Task Scheduler helper.
+- Documented TUI loop vs daemon loop.
+- Added background long-running loop examples.
+
+### v0.4.3
+
+- Added duplicate loop protection.
+- Quieted command markdown files.
 
 ## Notes and limits
 
-- The plugin is idle-driven. It does not run a background daemon while OpenCode is busy.
+- The TUI plugin is idle-driven. It does not run a background daemon while OpenCode is busy.
+- The TUI `/loop` command stops when OpenCode closes, the terminal closes, the machine sleeps, or the session stops emitting idle events.
+- For long-running work outside the TUI, use `opencode-loopd`.
 - `--timeout` is best-effort and relies on OpenCode's abort API.
 - `--verify`, `--preflight`, `--postrun`, and `--notify` run shell commands, so configure OpenCode permissions carefully.
 - `--until` scans common state files and a limited number of markdown/text/json/yaml files to avoid walking huge projects.
