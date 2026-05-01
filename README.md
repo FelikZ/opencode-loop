@@ -227,6 +227,37 @@ copy .\src\index.js .opencode\plugins\opencode-loop.js
 copy .\commands\*.md .opencode\commands\
 ```
 
+<<<<<<< HEAD
+=======
+### npm install - after publishing `@bybrawe/opencode-loop`
+
+Do **not** use this section for a plain GitHub clone. This is only for the npm package.
+
+The npm package name is scoped:
+
+```text
+@bybrawe/opencode-loop
+```
+
+Recommended npm install command:
+
+```bash
+npx -y @bybrawe/opencode-loop
+```
+
+This copies the plugin file and all `/loop-*` markdown command files into your OpenCode config directory, then you restart OpenCode. This is the most reliable install path because OpenCode slash commands are discovered from command files.
+
+If you only want OpenCode to load the npm plugin package directly, add the scoped package name to your OpenCode config:
+
+```json
+{
+  "$schema": "https://opencode.ai/config.json",
+  "plugin": ["@bybrawe/opencode-loop"]
+}
+```
+
+
+>>>>>>> 600c1cf8146d317efd682e20298f53c0cf2bf213
 ### Verify installation
 
 After restarting OpenCode, run:
