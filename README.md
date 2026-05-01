@@ -211,15 +211,6 @@ If you only want OpenCode to load the npm plugin package directly, add the scope
 }
 ```
 
-Use the scoped name exactly as shown. `opencode-loop` without `@bybrawe/` is a different npm package name.
-
-To publish this package publicly from an npm account or organization that owns the `bybrawe` scope:
-
-```bash
-npm publish --access public
-```
-
-If the package is not published to npm, the config entry above will not install the GitHub repository. Use the GitHub/local install steps instead.
 
 ### Verify installation
 
