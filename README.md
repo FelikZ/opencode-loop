@@ -35,6 +35,9 @@ OpenCode Loop is designed for developers searching for:
 
 ## Features
 
+> Note: OpenCode Loop is session-bound. It runs while OpenCode is open and the session receives idle events. If the terminal closes, the machine sleeps, the process is killed, or the provider connection is lost for a long time, the loop cannot continue in the background. Use an external process manager or scheduled `opencode run` script for true daemon behavior.
+
+
 - **Claude Code style auto-continue** with `/loop 0s ...`.
 - **Interval loops** for prompts, slash commands, and shell commands.
 - **Prompt-file support** with `--prompt-file loop-prompt.md` for long reusable instructions.
@@ -90,18 +93,79 @@ Shell command loop:
 
 ## Installation
 
-OpenCode Loop can be installed either from this GitHub repository or, after npm publishing, as the scoped npm package `@bybrawe/opencode-loop`.
+### Recommended: install from npm
 
-OpenCode supports two plugin loading modes:
+Install from npm with `npx`:
 
-- **Local plugin files** placed in `.opencode/plugins/` or `~/.config/opencode/plugins/`.
-- **npm package plugins** listed in `opencode.json`.
+```bash
+npx -y @bybrawe/opencode-loop
+```
 
-This repository is a GitHub repository, so the recommended installation method is the local plugin install below.
+On Windows CMD:
 
-> **Important:** when you use the install script, you do **not** need to add `"plugin": ["@bybrawe/opencode-loop"]` to `opencode.json`. The script installs the local plugin file and command files directly into OpenCode's config directory.
+```bat
+npx -y @bybrawe/opencode-loop
+```
 
-### Install from GitHub - Windows PowerShell
+On Windows PowerShell:
+
+```powershell
+npx -y @bybrawe/opencode-loop
+```
+
+The installer copies the plugin and slash command files into your OpenCode config directory.
+
+Windows target paths:
+
+```text
+%USERPROFILE%\.config\opencode\plugins\opencode-loop.js
+%USERPROFILE%\.config\opencode\commands\loop*.md
+```
+
+macOS / Linux target paths:
+
+```text
+~/.config/opencode/plugins/opencode-loop.js
+~/.config/opencode/commands/loop*.md
+```
+
+Then fully restart OpenCode and run:
+
+```text
+/loop-help
+/loop-doctor
+```
+
+### Why `npx` is the recommended npm install
+
+OpenCode can load npm plugins from the `plugin` array in `opencode.json`, but OpenCode slash commands are discovered from command definitions such as markdown files in a `commands/` directory or command entries in config. The `npx` installer installs both parts: the plugin file and the `/loop-*` command files.
+
+Use the OpenCode config-only method only if you already installed the command files separately or you are only testing plugin loading.
+
+### Optional: OpenCode config package entry
+
+If you want OpenCode to load the npm plugin package directly, add the scoped package name to your OpenCode config:
+
+```json
+{
+  "$schema": "https://opencode.ai/config.json",
+  "plugin": ["@bybrawe/opencode-loop"]
+}
+```
+
+Use the scoped package name exactly as shown. `opencode-loop` without `@bybrawe/` is a different npm package name.
+
+If `/loop` does not appear after using only the config method, run the installer once:
+
+```bash
+npx -y @bybrawe/opencode-loop
+```
+
+### Install from GitHub
+
+Use this if you want to install from source instead of npm.
+
+Windows PowerShell:
 
 ```powershell
 git clone https://github.com/ByBrawe/opencode-loop.git
@@ -109,34 +173,13 @@ cd opencode-loop
 powershell -ExecutionPolicy Bypass -File .\scripts\install.ps1
 ```
 
-The installer copies:
-
-```text
-src/index.js        -> %USERPROFILE%\.config\opencode\plugins\opencode-loop.js
-commands\*.md      -> %USERPROFILE%\.config\opencode\commands\
-```
-
-Then restart OpenCode and run:
-
-```text
-/loop-help
-/loop-doctor
-```
-
-### Install from GitHub - macOS / Linux / Git Bash
+macOS / Linux / Git Bash:
 
 ```bash
 git clone https://github.com/ByBrawe/opencode-loop.git
 cd opencode-loop
 chmod +x ./scripts/install.sh
 ./scripts/install.sh
-```
-
-The installer copies:
-
-```text
-src/index.js        -> ~/.config/opencode/plugins/opencode-loop.js
-commands/*.md      -> ~/.config/opencode/commands/
 ```
 
 Then restart OpenCode and run:
@@ -184,43 +227,6 @@ copy .\src\index.js .opencode\plugins\opencode-loop.js
 copy .\commands\*.md .opencode\commands\
 ```
 
-### npm install - after publishing `@bybrawe/opencode-loop`
-
-Do **not** use this section for a plain GitHub clone. This is only for the npm package.
-
-The npm package name is scoped:
-
-```text
-@bybrawe/opencode-loop
-```
-
-Recommended npm install command:
-
-```bash
-npx -y @bybrawe/opencode-loop
-```
-
-This copies the plugin file and all `/loop-*` markdown command files into your OpenCode config directory, then you restart OpenCode. This is the most reliable install path because OpenCode slash commands are discovered from command files.
-
-If you only want OpenCode to load the npm plugin package directly, add the scoped package name to your OpenCode config:
-
-```json
-{
-  "$schema": "https://opencode.ai/config.json",
-  "plugin": ["@bybrawe/opencode-loop"]
-}
-```
-
-Use the scoped name exactly as shown. `opencode-loop` without `@bybrawe/` is a different npm package name.
-
-To publish this package publicly from an npm account or organization that owns the `bybrawe` scope:
-
-```bash
-npm publish --access public
-```
-
-If the package is not published to npm, the config entry above will not install the GitHub repository. Use the GitHub/local install steps instead.
-
 ### Verify installation
 
 After restarting OpenCode, run:
@@ -235,7 +241,19 @@ If the commands do not appear:
 1. Make sure OpenCode was fully restarted.
 2. Check that `opencode-loop.js` exists in the OpenCode plugin directory.
 3. Check that `loop.md`, `loop-help.md`, and the other command files exist in the OpenCode commands directory.
-4. Run `/loop-doctor` if the command is available.
+4. Run `npx -y @bybrawe/opencode-loop` again to reinstall the command files.
+
+## Multiple loops and duplicate protection
+
+By default, `/loop ...` uses an upsert/replace behavior. Running `/loop 5m ...` again replaces the existing default loop instead of creating duplicate jobs.
+
+Use `--name` to manage separate named loops, or `--multi` when you intentionally want multiple loops with the same shape:
+
+```text
+/loop 5m --name dev continue from progress.md
+/loop 200m --name compact /compact
+/loop 10m --multi !npm test
+```
 
 ## Core commands
 

@@ -1,5 +1,5 @@
 ---
-description: Preset safe dev loop with ask-never, safe mode, batch 5 and checkpoint-only. Usage: /loop-safe-dev 0s
+description: OpenCode Loop plugin command.
 ---
 
-OpenCode Loop safe-dev preset. The plugin handles this command. Arguments: $ARGUMENTS
+Loop command received. The OpenCode Loop plugin handles this command. Do not explain this command, do not search the web, do not create scheduler files, and do not run extra shell commands because of this command.

@@ -186,6 +186,7 @@ function parseLoopArgs(raw, defaults = {}) {
     gitCheckpoint: defaults.gitCheckpoint ?? false,
     checkpointOnly: defaults.checkpointOnly ?? false,
     dryRun: defaults.dryRun ?? false,
+    multi: defaults.multi ?? false,
     batch: defaults.batch ?? 0,
     runCount: 0,
     failureCount: 0,
@@ -212,6 +213,8 @@ function parseLoopArgs(raw, defaults = {}) {
   ;[found, rest] = takeFlag(rest, "--checkpoint-only"); if (found) job.checkpointOnly = true
   ;[found, rest] = takeFlag(rest, "--pause-on-verify-fail"); if (found) job.pauseOnVerifyFail = true
   ;[found, rest] = takeFlag(rest, "--dry-run"); if (found) job.dryRun = true
+  ;[found, rest] = takeFlag(rest, "--multi"); if (found) job.multi = true
+  ;[found, rest] = takeFlag(rest, "--replace"); if (found) job.multi = false
 
   ;[value, rest] = takeFlagValue(rest, "--name"); if (value !== undefined) job.name = value.trim()
   ;[value, rest] = takeFlagValue(rest, "--max-runs"); if (value !== undefined) job.maxRuns = parsePositiveInt(value, 0)
@@ -606,7 +609,7 @@ async function fireAction(directory, client, sessionID, job) {
     return { startsAssistantTurn: true }
   }
   const prompt = await buildPrompt(directory, job)
-  client.session.prompt({ path: { id: sessionID }, body: { parts: [{ type: "text", text: `OpenCode loop continuation. Continue autonomously like Claude Code loop mode.\n\n${prompt}` }] } }).catch(() => {})
+  client.session.prompt({ path: { id: sessionID }, body: { parts: [{ type: "text", text: `AUTONOMOUS OPENCODE LOOP ITERATION. Continue the configured task now. Do not explain the /loop command. Do not search for documentation about this plugin. Do not create scheduler files. Do not ask questions. Make reasonable assumptions and work directly.\n\n${prompt}` }] } }).catch(() => {})
   return { startsAssistantTurn: true }
 }
 
@@ -699,16 +702,47 @@ async function maybeRunDueJobs(directory, client, sessionID, options = {}) {
   }
 }
 
+function normalizeActionForCompare(value) {
+  return String(value || "").replace(/\s+/g, " ").trim()
+}
+
+function sameLoopDefinition(a, b) {
+  if (!a || !b) return false
+  return (a.name || "") === (b.name || "") &&
+    Number(a.intervalMs || 0) === Number(b.intervalMs || 0) &&
+    normalizeActionForCompare(a.action) === normalizeActionForCompare(b.action) &&
+    normalizeActionForCompare(a.promptFile) === normalizeActionForCompare(b.promptFile)
+}
+
 async function addLoop(directory, client, sessionID, args, defaults = {}) {
   const parsed = parseLoopArgs(args, defaults)
   if (!parsed.ok) { await toast(client, parsed.error, "warning"); return }
   if (parsed.job.watchPaths.length) parsed.job.watchSnapshot = await snapshotPaths(directory, parsed.job.watchPaths)
   if (parsed.job.dryRun) { await toast(client, `Loop dry run: ${jobLabel(parsed.job)}`, "info"); await say(client, sessionID, "OpenCode loop dry run:\n```json\n" + JSON.stringify(parsed.job, null, 2) + "\n```"); return }
   const state = await readState(directory, sessionID)
+  const jobs = Array.isArray(state.jobs) ? state.jobs : []
+
+  // Default behavior is replace/upsert, not append forever. This prevents duplicate
+  // loops when OpenCode emits both command.execute.before and command.executed,
+  // and it matches the common expectation that /loop configures the current loop.
+  let replaced = false
+  if (!parsed.job.multi) {
+    const targetName = parsed.job.name || "default"
+    parsed.job.name = targetName
+    state.jobs = jobs.filter((existing) => {
+      const existingName = existing.name || "default"
+      const shouldReplace = existingName === targetName || sameLoopDefinition(existing, parsed.job)
+      if (shouldReplace) replaced = true
+      return !shouldReplace
+    })
+  } else {
+    state.jobs = jobs
+  }
+
   state.jobs.push(parsed.job)
   await writeState(directory, sessionID, state)
-  await toast(client, `Loop added: ${jobLabel(parsed.job)}`, "success")
-  await appendLoopLog(directory, "add", { sessionID, job: parsed.job.name || parsed.job.id, label: jobLabel(parsed.job) })
+  await toast(client, `${replaced ? "Loop replaced" : "Loop added"}: ${jobLabel(parsed.job)}`, "success")
+  await appendLoopLog(directory, replaced ? "replace" : "add", { sessionID, job: parsed.job.name || parsed.job.id, label: jobLabel(parsed.job) })
 }
 
 async function stopLoop(directory, client, sessionID, args) {

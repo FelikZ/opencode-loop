@@ -1,6 +1,6 @@
 {
   "name": "@bybrawe/opencode-loop",
-  "version": "0.4.2",
+  "version": "0.4.4",
   "description": "Claude Code style auto-continue /loop command for OpenCode: autonomous loops, compact scheduling, progress.md TODO automation, verification, checkpoints, and safe long-running coding sessions.",
   "type": "module",
   "main": "src/index.js",

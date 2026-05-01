@@ -1,5 +1,5 @@
 ---
-description: Remove loop jobs. Alias of /loop-stop. Usage: /loop-remove <id|name|number|all>
+description: OpenCode Loop plugin command.
 ---
 
-OpenCode Loop remove command. The plugin handles this command. Arguments: $ARGUMENTS
+Loop command received. The OpenCode Loop plugin handles this command. Do not explain this command, do not search the web, do not create scheduler files, and do not run extra shell commands because of this command.

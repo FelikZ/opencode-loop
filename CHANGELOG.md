@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.4.4
+
+- Made the npm install path the primary README installation method now that the package is published as `@bybrawe/opencode-loop`.
+- Clarified that `npx -y @bybrawe/opencode-loop` installs both the plugin file and `/loop-*` command markdown files.
+- Moved the OpenCode `plugin` array config to an optional/advanced section because config-only loading may not install slash command markdown files.
+- Removed maintainer/publish-oriented instructions from the user-facing install flow.
+
+
+## 0.4.3
+
+- Fixed duplicate loop creation by making /loop replace/upsert the default loop instead of appending duplicate jobs.
+- Added --multi for users who intentionally want multiple independent loops in one session.
+- Added --replace as an explicit alias for the default upsert behavior.
+- Made command markdown files no-op/silent so the model is less likely to explain the command or create scheduler files.
+- Hardened the continuation prompt to avoid scheduling, documentation search, and command explanation loops.
+- Clarified that the plugin is session/TUI-bound and does not keep running after OpenCode, the terminal, or the machine disconnects.
+
 ## 0.4.2
 
 - Changed npm package name to scoped package `@bybrawe/opencode-loop`.

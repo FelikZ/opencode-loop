@@ -1,5 +1,5 @@
 ---
-description: Stop loop jobs. Usage: /loop-stop, /loop-stop all, /loop-stop <id|name|number>
+description: Stop OpenCode Loop jobs.
 ---
 
-OpenCode Loop stop command. The plugin handles this command. Arguments: $ARGUMENTS
+Loop command received. The OpenCode Loop plugin handles this command. Do not explain this command, do not search the web, do not create scheduler files, and do not run extra shell commands because of this command.
