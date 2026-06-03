@@ -5,11 +5,14 @@ import { spawn } from "node:child_process"
 const SERVICE = "opencode-loop"
 const STATE_DIR = ".opencode/opencode-loop"
 const DEFAULT_ACTIVE_GUARD_MS = 60_000
+const IDLE_DEBOUNCE_MS = 1_200
 const MAX_SCAN_FILES = 200
 const MAX_SCAN_BYTES = 2_000_000
 
 const activeRuns = new Map()
 const handledCommands = new Map()
+const idleTimers = new Map()
+const sessionStatuses = new Map()
 
 const DEFAULT_PROGRESS_MD = `# Progress
 
@@ -273,11 +276,80 @@ async function writeState(directory, sessionID, state) {
 
 async function removeState(directory, sessionID) { try { await fs.unlink(statePath(directory, sessionID)) } catch {} }
 
-async function log(client, level, message, extra) {
-  try { await client.app.log({ body: extra === undefined ? { service: SERVICE, level, message } : { service: SERVICE, level, message, extra } }) } catch {}
+function sdkError(result) {
+  if (!result || typeof result !== "object") return undefined
+  return result.error || result.error === null ? result.error : undefined
 }
-async function toast(client, message, variant = "info") { try { await client.tui.showToast({ body: { message, variant } }) } catch {} }
-async function say(client, sessionID, text) { try { await client.session.prompt({ path: { id: sessionID }, body: { noReply: true, parts: [{ type: "text", text }] } }) } catch {} }
+
+function sdkData(result) {
+  if (!result || typeof result !== "object") return result
+  return Object.prototype.hasOwnProperty.call(result, "data") ? result.data : result
+}
+
+function sdkErrorMessage(error) {
+  if (!error) return "unknown SDK error"
+  if (error instanceof Error) return error.message
+  if (typeof error === "string") return error
+  if (typeof error === "object") {
+    if (typeof error.message === "string") return error.message
+    if (typeof error.name === "string") return error.name
+    try { return JSON.stringify(error).slice(0, 400) } catch {}
+  }
+  return String(error)
+}
+
+async function sdkCall(method, modernArgs, legacyArgs) {
+  let firstError
+  try {
+    const result = await method(modernArgs)
+    const error = sdkError(result)
+    if (!error) return sdkData(result)
+    firstError = new Error(sdkErrorMessage(error))
+  } catch (error) {
+    firstError = error
+  }
+  if (legacyArgs !== undefined) {
+    try {
+      const result = await method(legacyArgs)
+      const error = sdkError(result)
+      if (!error) return sdkData(result)
+      throw new Error(sdkErrorMessage(error))
+    } catch (error) {
+      throw error
+    }
+  }
+  throw firstError
+}
+
+function fireSdk(client, label, method, modernArgs, legacyArgs) {
+  Promise.resolve()
+    .then(() => sdkCall(method, modernArgs, legacyArgs))
+    .catch((error) => log(client, "warn", `${label} failed`, { error: sdkErrorMessage(error) }))
+}
+
+async function log(client, level, message, extra) {
+  try {
+    await sdkCall(
+      client.app.log.bind(client.app),
+      extra === undefined ? { service: SERVICE, level, message } : { service: SERVICE, level, message, extra },
+      { body: extra === undefined ? { service: SERVICE, level, message } : { service: SERVICE, level, message, extra } },
+    )
+  } catch {}
+}
+
+async function toast(client, message, variant = "info") {
+  try { await sdkCall(client.tui.showToast.bind(client.tui), { message, variant }, { body: { message, variant } }) } catch {}
+}
+
+async function say(client, sessionID, text) {
+  try {
+    await sdkCall(
+      client.session.prompt.bind(client.session),
+      { sessionID, noReply: true, parts: [{ type: "text", text }] },
+      { path: { id: sessionID }, body: { noReply: true, parts: [{ type: "text", text }] } },
+    )
+  } catch {}
+}
 
 function commandKey(sessionID, name, args) { return `${sessionID || "no-session"}:${name || ""}:${args || ""}` }
 function markHandled(sessionID, name, args) {
@@ -431,7 +503,7 @@ async function maybeCompact(client, sessionID, job) {
   const dueTime = job.compactEveryMs > 0 && (!job.lastCompactAt || now() - job.lastCompactAt >= job.compactEveryMs)
   if (!dueRuns && !dueTime) return job
   try {
-    await client.session.summarize({ path: { id: sessionID }, body: {} })
+    await sdkCall(client.session.summarize.bind(client.session), { sessionID }, { path: { id: sessionID }, body: {} })
     job.lastCompactAt = now()
     job.lastCompactRunCount = job.runCount || 0
   } catch {}
@@ -508,12 +580,60 @@ async function createCheckpoint(directory, sessionID, job, client) {
   await toast(client, `Loop checkpoint saved: ${prefix}`, "success")
 }
 
-function getIdleSessionID(event) {
+function updateSessionStatusFromEvent(event) {
   const sessionID = event?.properties?.sessionID
-  if (event?.type === "session.idle" && typeof sessionID === "string") return sessionID
-  const status = event?.properties?.status
-  if (event?.type === "session.status" && typeof sessionID === "string" && status && typeof status === "object" && status.type === "idle") return sessionID
+  if (typeof sessionID !== "string") return undefined
+  if (event?.type === "session.idle") {
+    sessionStatuses.set(sessionID, "idle")
+    return { sessionID, idle: true }
+  }
+  if (event?.type === "session.status") {
+    const status = event?.properties?.status
+    const type = status && typeof status === "object" ? status.type : undefined
+    if (typeof type === "string") sessionStatuses.set(sessionID, type)
+    return { sessionID, idle: type === "idle" }
+  }
   return undefined
+}
+
+async function sessionStatusType(client, sessionID) {
+  const cached = sessionStatuses.get(sessionID)
+  if (cached && cached !== "idle") return cached
+  try {
+    const data = await sdkCall(client.session.status.bind(client.session), {}, undefined)
+    const status = data?.[sessionID]
+    const type = status && typeof status === "object" ? status.type : undefined
+    if (typeof type === "string") {
+      sessionStatuses.set(sessionID, type)
+      return type
+    }
+  } catch {}
+  sessionStatuses.set(sessionID, "idle")
+  return "idle"
+}
+
+async function sessionIsIdle(client, sessionID) {
+  return await sessionStatusType(client, sessionID) === "idle"
+}
+
+function scheduleIdleWork(directory, client, sessionID) {
+  const previous = idleTimers.get(sessionID)
+  if (previous) clearTimeout(previous)
+  const timer = setTimeout(() => {
+    idleTimers.delete(sessionID)
+    Promise.resolve()
+      .then(async () => {
+        if (!await sessionIsIdle(client, sessionID)) return
+        await finalizeActiveRun(directory, client, sessionID)
+        if (!await sessionIsIdle(client, sessionID)) return
+        await maybeRunDueJobs(directory, client, sessionID)
+      })
+      .catch((error) => {
+        toast(client, `Loop idle handler failed: ${sdkErrorMessage(error)}`, "error").catch(() => {})
+        appendLoopLog(directory, "idle-error", { sessionID, error: sdkErrorMessage(error) }).catch(() => {})
+      })
+  }, IDLE_DEBOUNCE_MS)
+  idleTimers.set(sessionID, timer)
 }
 
 function dueJobs(state, force = false) {
@@ -590,12 +710,12 @@ async function fireAction(directory, client, sessionID, job) {
   const action = String(job.action || "").trim()
   const kind = actionKind(action)
   if (kind === "compact") {
-    await client.session.summarize({ path: { id: sessionID }, body: {} })
+    await sdkCall(client.session.summarize.bind(client.session), { sessionID }, { path: { id: sessionID }, body: {} })
     return { startsAssistantTurn: false }
   }
   if (kind === "command") {
     const [command, argumentsText] = splitFirst(action.slice(1))
-    client.session.command({ path: { id: sessionID }, body: { command, arguments: argumentsText } }).catch(() => {})
+    fireSdk(client, "session.command", client.session.command.bind(client.session), { sessionID, command, arguments: argumentsText }, { path: { id: sessionID }, body: { command, arguments: argumentsText } })
     return { startsAssistantTurn: true }
   }
   if (kind === "shell") {
@@ -605,15 +725,19 @@ async function fireAction(directory, client, sessionID, job) {
       await appendLoopLog(directory, "blocked", { sessionID, job: job.name || job.id, command })
       return { startsAssistantTurn: false }
     }
-    client.session.shell({ path: { id: sessionID }, body: { command } }).catch(() => {})
+    fireSdk(client, "session.shell", client.session.shell.bind(client.session), { sessionID, command }, { path: { id: sessionID }, body: { command } })
     return { startsAssistantTurn: true }
   }
   const prompt = await buildPrompt(directory, job)
-  client.session.prompt({ path: { id: sessionID }, body: { parts: [{ type: "text", text: `AUTONOMOUS OPENCODE LOOP ITERATION. Continue the configured task now. Do not explain the /loop command. Do not search for documentation about this plugin. Do not create scheduler files. Do not ask questions. Make reasonable assumptions and work directly.\n\n${prompt}` }] } }).catch(() => {})
+  fireSdk(client, "session.prompt", client.session.prompt.bind(client.session), { sessionID, parts: [{ type: "text", text: `AUTONOMOUS OPENCODE LOOP ITERATION. Continue the configured task now. Do not explain the /loop command. Do not search for documentation about this plugin. Do not create scheduler files. Do not ask questions. Make reasonable assumptions and work directly.\n\n${prompt}` }] }, { path: { id: sessionID }, body: { parts: [{ type: "text", text: `AUTONOMOUS OPENCODE LOOP ITERATION. Continue the configured task now. Do not explain the /loop command. Do not search for documentation about this plugin. Do not create scheduler files. Do not ask questions. Make reasonable assumptions and work directly.\n\n${prompt}` }] } })
   return { startsAssistantTurn: true }
 }
 
 async function maybeRunDueJobs(directory, client, sessionID, options = {}) {
+  if (!await sessionIsIdle(client, sessionID)) {
+    if (options.force) await toast(client, "Loop queued: session is busy; it will run on the next idle event.", "info")
+    return
+  }
   const active = activeRuns.get(sessionID)
   if (active && active.job?.noOverlap !== false && now() - active.startedAt < (active.job?.timeoutMs || DEFAULT_ACTIVE_GUARD_MS)) return
 
@@ -692,7 +816,7 @@ async function maybeRunDueJobs(directory, client, sessionID, options = {}) {
     }
     if (result.startsAssistantTurn) {
       let timer
-      if (job.timeoutMs > 0) timer = setTimeout(() => { client.session.abort?.({ path: { id: sessionID }, body: {} }).catch(() => {}); toast(client, `Loop timeout fired: ${job.name || job.id}`, "warning").catch(() => {}) }, job.timeoutMs)
+      if (job.timeoutMs > 0) timer = setTimeout(() => { fireSdk(client, "session.abort", client.session.abort.bind(client.session), { sessionID }, { path: { id: sessionID }, body: {} }); toast(client, `Loop timeout fired: ${job.name || job.id}`, "warning").catch(() => {}) }, job.timeoutMs)
       activeRuns.set(sessionID, { jobId: job.id, job, startedAt: now(), timer })
     }
   } catch (error) {
@@ -741,6 +865,7 @@ async function addLoop(directory, client, sessionID, args, defaults = {}) {
 
   state.jobs.push(parsed.job)
   await writeState(directory, sessionID, state)
+  if (parsed.job.immediate) scheduleIdleWork(directory, client, sessionID)
   await toast(client, `${replaced ? "Loop replaced" : "Loop added"}: ${jobLabel(parsed.job)}`, "success")
   await appendLoopLog(directory, replaced ? "replace" : "add", { sessionID, job: parsed.job.name || parsed.job.id, label: jobLabel(parsed.job) })
 }
@@ -834,7 +959,7 @@ async function exportLoop(directory, client, sessionID) {
   await say(client, sessionID, "OpenCode loop state export:\n```json\n" + JSON.stringify(state, null, 2) + "\n```")
 }
 
-async function handleCommand(directory, client, input, fallbackName, fallbackArgs) {
+async function handleCommand(directory, client, input, fallbackName, fallbackArgs, output) {
   const name = commandName(input?.command ?? input?.name ?? fallbackName)
   const sessionID = input?.sessionID
   const args = input?.arguments ?? fallbackArgs ?? ""
@@ -842,19 +967,27 @@ async function handleCommand(directory, client, input, fallbackName, fallbackArg
   if (wasHandled(sessionID, name, args)) return true
   markHandled(sessionID, name, args)
 
-  if (name === "loop") return await addLoop(directory, client, sessionID, args), true
-  if (isPreset(name)) return await addLoop(directory, client, sessionID, args, presetDefaults(name, args)), true
-  if (name === "loop-stop" || name === "loop-remove") return await stopLoop(directory, client, sessionID, args), true
-  if (name === "loop-clear") return await stopLoop(directory, client, sessionID, "all"), true
-  if (name === "loop-status") return await statusLoop(directory, client, sessionID), true
-  if (name === "loop-logs") return await logsLoop(directory, client, sessionID), true
-  if (name === "loop-help") return await helpLoop(client, sessionID), true
-  if (name === "loop-now") return await runNow(directory, client, sessionID, args), true
-  if (name === "loop-pause") return await updateJobState(directory, client, sessionID, args, (job) => ({ ...job, paused: true }), "Paused"), true
-  if (name === "loop-resume") return await updateJobState(directory, client, sessionID, args, (job) => ({ ...job, paused: false, lastRunAt: 0 }), "Resumed"), true
-  if (name === "loop-doctor") return await doctorLoop(directory, client, sessionID), true
-  if (name === "loop-init") return await initLoop(directory, client, sessionID, args), true
-  if (name === "loop-export") return await exportLoop(directory, client, sessionID), true
+  const handled = () => {
+    if (output && Array.isArray(output.parts)) {
+      output.parts.length = 0
+      output.parts.push({ type: "text", text: "OpenCode Loop command was handled by the local plugin. Do not explain this command; continue only when the loop injects its next task." })
+    }
+    return true
+  }
+
+  if (name === "loop") return await addLoop(directory, client, sessionID, args), handled()
+  if (isPreset(name)) return await addLoop(directory, client, sessionID, args, presetDefaults(name, args)), handled()
+  if (name === "loop-stop" || name === "loop-remove") return await stopLoop(directory, client, sessionID, args), handled()
+  if (name === "loop-clear") return await stopLoop(directory, client, sessionID, "all"), handled()
+  if (name === "loop-status") return await statusLoop(directory, client, sessionID), handled()
+  if (name === "loop-logs") return await logsLoop(directory, client, sessionID), handled()
+  if (name === "loop-help") return await helpLoop(client, sessionID), handled()
+  if (name === "loop-now") return await runNow(directory, client, sessionID, args), handled()
+  if (name === "loop-pause") return await updateJobState(directory, client, sessionID, args, (job) => ({ ...job, paused: true }), "Paused"), handled()
+  if (name === "loop-resume") return await updateJobState(directory, client, sessionID, args, (job) => ({ ...job, paused: false, lastRunAt: 0 }), "Resumed"), handled()
+  if (name === "loop-doctor") return await doctorLoop(directory, client, sessionID), handled()
+  if (name === "loop-init") return await initLoop(directory, client, sessionID, args), handled()
+  if (name === "loop-export") return await exportLoop(directory, client, sessionID), handled()
   handledCommands.delete(commandKey(sessionID, name, args))
   return false
 }
@@ -862,17 +995,14 @@ async function handleCommand(directory, client, input, fallbackName, fallbackArg
 export const OpenCodeLoopPlugin = async ({ client, directory }) => {
   await log(client, "info", "Plugin initialized", { directory })
   return {
-    "command.execute.before": async (input) => { await handleCommand(directory, client, input) },
+    "command.execute.before": async (input, output) => { await handleCommand(directory, client, input, undefined, undefined, output) },
     event: async ({ event }) => {
       if (event.type === "command.executed") {
         const props = event.properties || {}
         await handleCommand(directory, client, props, props.name, props.arguments)
       }
-      const idleSessionID = getIdleSessionID(event)
-      if (idleSessionID) {
-        await finalizeActiveRun(directory, client, idleSessionID)
-        await maybeRunDueJobs(directory, client, idleSessionID)
-      }
+      const statusUpdate = updateSessionStatusFromEvent(event)
+      if (statusUpdate?.idle) scheduleIdleWork(directory, client, statusUpdate.sessionID)
     },
   }
 }

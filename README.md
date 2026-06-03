@@ -9,6 +9,20 @@ It is useful for long coding sessions, `progress.md` workflows, TODO automation,
 Repository: **ByBrawe/opencode-loop**  
 NPM package name: **@bybrawe/opencode-loop**
 
+## Current status
+
+**v0.5.4 fixes the recent OpenCode update compatibility issue.** OpenCode Loop has been updated for the current OpenCode SDK/TUI call shape and idle/status behavior. The TUI loop now waits for the session to become idle, debounces idle events, and avoids starting a new run while OpenCode is still busy or queued.
+
+The known update-related symptoms from older builds are fixed:
+
+- `/loop` looks queued but the job stays at `runs=0`
+- a loop job is replaced but does not fire after OpenCode becomes idle
+- repeated `/loop` commands create confusing queued turns
+- prompt, shell, or toast calls silently fail after OpenCode SDK changes
+- intermittent `Tool execution aborted` behavior caused by triggering a new turn too early
+
+The TUI loop is still intentionally session-bound: it runs while OpenCode is open and the current session emits status/idle events. For long-running background work after closing the terminal or OpenCode, use `opencode-loopd`.
+
 ## Why this exists
 
 Claude Code users often rely on a loop-like workflow where the agent finishes one step, then immediately continues with the next step.
@@ -77,6 +91,14 @@ OpenCode Loop is designed for developers searching for:
 ## Installation
 
 ### Recommended: install from npm
+
+For a clean reinstall or upgrade, use the latest published package:
+
+```bash
+npx -y @bybrawe/opencode-loop@latest
+```
+
+Then fully restart OpenCode.
 
 Install from npm with `npx`:
 
@@ -810,6 +832,14 @@ Improve the application in small safe steps.
 ```
 
 ## Changelog highlights
+
+### v0.5.4
+
+- Fixed compatibility with recent OpenCode SDK/TUI call shapes.
+- Updated prompt, shell, and toast calls for current OpenCode while keeping backwards-compatible fallbacks.
+- Added `session.status` idle gating and debounce so loop runs do not stack on top of busy/queued agent turns.
+- Improved logging around prompt/shell/toast failures instead of silently swallowing important runtime errors.
+- Fixed the known update-related symptoms where `/loop` could appear queued, stay at `runs=0`, or only work intermittently.
 
 ### v0.5.1
 

@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.5.4
+
+- Fixed compatibility with recent OpenCode SDK/TUI call shapes.
+- Updated session prompt, shell, and toast calls for current OpenCode while keeping backwards-compatible fallbacks.
+- Added `session.status` idle gating and debounce so loop runs wait for OpenCode to become idle and do not stack on busy/queued turns.
+- Improved runtime logging for prompt/shell/toast failures.
+- Fixed the known update-related symptoms where `/loop` could appear queued, stay at `runs=0`, or only work intermittently after OpenCode updates.
+
 ## 0.5.0
 
 - Added `opencode-loopd` background daemon for long-running loops outside the OpenCode TUI.
