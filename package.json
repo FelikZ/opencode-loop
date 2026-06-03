@@ -1,7 +1,7 @@
 {
   "name": "@bybrawe/opencode-loop",
-  "version": "0.5.6",
-  "description": "Claude Code style /loop command and background daemon for OpenCode: auto-continue, progress.md TODO automation, compact scheduling, verification, checkpoints, and safe autonomous coding loops.",
+  "version": "0.5.7",
+  "description": "Claude Code/Codex style /loop and experimental goal mode for OpenCode: auto-continue, command loops, compact scheduling, verification, checkpoints, and safe autonomous coding goals.",
   "type": "module",
   "main": "src/index.js",
   "exports": {

@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.5.7
+
+- Added experimental Goal Mode with `/loop-goal <objective>`.
+- Added goal lifecycle commands: `/loop-goal-status`, `/loop-goal-pause`, `/loop-goal-resume`, `/loop-goal-clear`, `/loop-goal-done`, and `/loop-goal-blocked`.
+- Added local goal tools exposed to the agent: `opencode_loop_goal_complete`, `opencode_loop_goal_blocked`, and `opencode_loop_goal_progress`.
+- Added goal acceptance criteria with repeated `--acceptance` / `--success` flags.
+- Added post-turn goal check commands with repeated `--check` flags.
+- Added `--complete-when-checks-pass` for goals that should automatically stop once all configured checks pass.
+- Added `--max-turns` alias for goal run limits.
+- Added goal reports under `.opencode/opencode-loop/goals/` and optional `--evidence-file`.
+- Updated README with simple examples explaining prompt loops, command loops, shell loops, scheduled checks, and experimental persistent goals.
+
 ## 0.5.6
 
 - Added clearer README examples for prompt loops, scheduled question loops, OpenCode slash-command loops, shell loops, first-run timing, and idle-safe behavior.

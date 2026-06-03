@@ -8,6 +8,8 @@ const DEFAULT_ACTIVE_GUARD_MS = 60_000
 const IDLE_DEBOUNCE_MS = 1_200
 const MAX_SCAN_FILES = 200
 const MAX_SCAN_BYTES = 2_000_000
+const GOAL_REPORT_DIR = "goals"
+const GOAL_PROMPT_PREFIX = "EXPERIMENTAL OPENCODE GOAL MODE ITERATION"
 
 const activeRuns = new Map()
 const handledCommands = new Map()
@@ -149,7 +151,7 @@ function parseLoopArgs(raw, defaults = {}) {
     } else if (first) {
       const parsedDuration = parseDuration(first)
       if (parsedDuration !== null) intervalMs = parsedDuration
-      else if (intervalMs === null) return { ok: false, error: "Usage: /loop 0s <prompt> | /loop 5m <prompt> | /loop-command 200m /compact | /loop-shell 10m npm test | /loop --watch progress.md <prompt>" }
+      else if (intervalMs === null) return { ok: false, error: "Usage: /loop 0s <prompt> | /loop 5m <prompt> | /loop-goal <objective> | /loop-command 200m /compact | /loop-shell 10m npm test | /loop --watch progress.md <prompt>" }
       else rest = input
     }
   }
@@ -182,6 +184,16 @@ function parseLoopArgs(raw, defaults = {}) {
     notifyCommand: defaults.notifyCommand,
     branch: defaults.branch,
     branchDone: false,
+    goalStatus: defaults.goalStatus,
+    goalFile: defaults.goalFile,
+    goalAcceptance: Array.isArray(defaults.goalAcceptance) ? [...defaults.goalAcceptance] : [],
+    goalChecks: Array.isArray(defaults.goalChecks) ? [...defaults.goalChecks] : [],
+    goalCompleteWhenChecksPass: defaults.goalCompleteWhenChecksPass ?? false,
+    goalEvidenceFile: defaults.goalEvidenceFile,
+    goalSummary: defaults.goalSummary || "",
+    goalEvidence: defaults.goalEvidence || "",
+    goalBlockedReason: defaults.goalBlockedReason || "",
+    goalProgress: Array.isArray(defaults.goalProgress) ? [...defaults.goalProgress] : [],
     noOverlap: defaults.noOverlap ?? true,
     safe: defaults.safe ?? false,
     quiet: defaults.quiet ?? false,
@@ -226,9 +238,13 @@ function parseLoopArgs(raw, defaults = {}) {
   ;[found, rest] = takeFlag(rest, "--slash"); if (found) job.kind = "command"
   ;[found, rest] = takeFlag(rest, "--shell"); if (found) job.kind = "shell"
   ;[found, rest] = takeFlag(rest, "--compact"); if (found) job.kind = "compact"
+  ;[found, rest] = takeFlag(rest, "--goal"); if (found) job.kind = "goal"
+  ;[found, rest] = takeFlag(rest, "--complete-when-checks-pass"); if (found) job.goalCompleteWhenChecksPass = true
+  ;[found, rest] = takeFlag(rest, "--no-complete-when-checks-pass"); if (found) job.goalCompleteWhenChecksPass = false
 
   ;[value, rest] = takeFlagValue(rest, "--name"); if (value !== undefined) job.name = value.trim()
   ;[value, rest] = takeFlagValue(rest, "--max-runs"); if (value !== undefined) job.maxRuns = parsePositiveInt(value, 0)
+  ;[value, rest] = takeFlagValue(rest, "--max-turns"); if (value !== undefined) job.maxRuns = parsePositiveInt(value, 0)
   ;[value, rest] = takeFlagValue(rest, "--timeout"); if (value !== undefined) job.timeoutMs = parseDuration(value) ?? 0
   ;[value, rest] = takeFlagValue(rest, "--max-runtime"); if (value !== undefined) job.maxRuntimeMs = parseDuration(value) ?? 0
   ;[value, rest] = takeFlagValue(rest, "--max-failures"); if (value !== undefined) job.maxFailures = parsePositiveInt(value, 0)
@@ -236,6 +252,8 @@ function parseLoopArgs(raw, defaults = {}) {
   ;[value, rest] = takeFlagValue(rest, "--stop-file"); if (value !== undefined) job.stopFile = stripOuterQuotes(value)
   ;[value, rest] = takeFlagValue(rest, "--progress-file"); if (value !== undefined) job.progressFile = stripOuterQuotes(value)
   ;[value, rest] = takeFlagValue(rest, "--prompt-file"); if (value !== undefined) job.promptFile = stripOuterQuotes(value)
+  ;[value, rest] = takeFlagValue(rest, "--goal-file"); if (value !== undefined) job.goalFile = stripOuterQuotes(value)
+  ;[value, rest] = takeFlagValue(rest, "--evidence-file"); if (value !== undefined) job.goalEvidenceFile = stripOuterQuotes(value)
   ;[value, rest] = takeFlagValue(rest, "--test"); if (value !== undefined) job.testCommand = stripOuterQuotes(value)
   ;[value, rest] = takeFlagValue(rest, "--verify"); if (value !== undefined) job.verifyCommand = stripOuterQuotes(value)
   ;[value, rest] = takeFlagValue(rest, "--preflight"); if (value !== undefined) job.preflightCommand = stripOuterQuotes(value)
@@ -254,12 +272,33 @@ function parseLoopArgs(raw, defaults = {}) {
   job.includeFiles.push(...includes[0].map(stripOuterQuotes).filter(Boolean))
   rest = includes[1]
 
+  const acceptances = takeAllFlagValues(rest, "--acceptance")
+  job.goalAcceptance.push(...acceptances[0].map(stripOuterQuotes).filter(Boolean))
+  rest = acceptances[1]
+
+  const success = takeAllFlagValues(rest, "--success")
+  job.goalAcceptance.push(...success[0].map(stripOuterQuotes).filter(Boolean))
+  rest = success[1]
+
+  const checks = takeAllFlagValues(rest, "--check")
+  job.goalChecks.push(...checks[0].map(stripOuterQuotes).filter(Boolean))
+  rest = checks[1]
+
   job.action = stripOuterQuotes(rest || job.action || "")
   job.watchPaths = [...new Set(job.watchPaths)]
   job.includeFiles = [...new Set(job.includeFiles)]
+  job.goalAcceptance = [...new Set(job.goalAcceptance || [])]
+  job.goalChecks = [...new Set(job.goalChecks || [])]
+  if (String(job.kind || "").toLowerCase() === "goal") {
+    job.name = job.name || "goal"
+    job.goalStatus = job.goalStatus || "active"
+    job.safe = job.safe !== false
+    job.askNever = job.askNever !== false
+    job.noOverlap = job.noOverlap !== false
+  }
   job.lastRunAt = job.immediate ? 0 : now()
 
-  if (!job.action && !job.promptFile) return { ok: false, error: "Missing action. Example: /loop 0s continue from progress.md or /loop 0s --prompt-file loop-prompt.md" }
+  if (!job.action && !job.promptFile && !job.goalFile) return { ok: false, error: "Missing action. Example: /loop 0s continue from progress.md, /loop-goal ship the feature, or /loop 0s --prompt-file loop-prompt.md" }
   return { ok: true, job }
 }
 
@@ -271,15 +310,15 @@ async function pathExists(filePath) { try { await fs.access(filePath); return tr
 async function readState(directory, sessionID) {
   try {
     const parsed = JSON.parse(await fs.readFile(statePath(directory, sessionID), "utf8"))
-    return { version: 3, jobs: Array.isArray(parsed.jobs) ? parsed.jobs : [] }
+    return { version: 4, jobs: Array.isArray(parsed.jobs) ? parsed.jobs : [] }
   } catch {
-    return { version: 3, jobs: [] }
+    return { version: 4, jobs: [] }
   }
 }
 
 async function writeState(directory, sessionID, state) {
   await ensureDir(stateDir(directory))
-  await fs.writeFile(statePath(directory, sessionID), JSON.stringify({ version: 3, jobs: state.jobs || [] }, null, 2))
+  await fs.writeFile(statePath(directory, sessionID), JSON.stringify({ version: 4, jobs: state.jobs || [] }, null, 2))
 }
 
 async function removeState(directory, sessionID) { try { await fs.unlink(statePath(directory, sessionID)) } catch {} }
@@ -497,6 +536,7 @@ function actionKind(action, job = {}) {
   const text = String(action || "").trim()
   const forced = String(job.kind || "").trim().toLowerCase()
   if (forced === "compact") return "compact"
+  if (forced === "goal") return "goal"
   if (text === "/compact" || text === "/summarize") return "compact"
   if (forced === "prompt" || forced === "ask") return "prompt"
   if (forced === "command" || forced === "cmd" || forced === "slash") return "command"
@@ -520,7 +560,63 @@ function decoratePrompt(job) {
   return `${job.action}\n\nOpenCode loop instructions:\n- ${additions.join("\n- ")}`
 }
 
+function isGoalJob(job) {
+  return String(job?.kind || "").toLowerCase() === "goal"
+}
+
+function goalStatusText(job) {
+  const status = job?.goalStatus || (isGoalJob(job) ? "active" : "")
+  if (!status) return ""
+  if (status === "completed") return "completed"
+  if (status === "blocked") return "blocked"
+  if (job?.paused) return "paused"
+  return status
+}
+
+async function buildGoalPrompt(directory, job) {
+  const sections = []
+  const objective = String(job.action || "").trim()
+  if (objective) sections.push(`Goal objective:\n${objective}`)
+  if (job.goalFile) {
+    const text = await readSmallTextFile(path.resolve(directory, job.goalFile), 120_000)
+    if (text.trim()) sections.push(`Goal file ${job.goalFile}:\n${text.trim()}`)
+    else sections.push(`Goal file ${job.goalFile} was requested but could not be read. Continue from the inline goal objective.`)
+  }
+  if (job.promptFile) {
+    const text = await readSmallTextFile(path.resolve(directory, job.promptFile), 120_000)
+    if (text.trim()) sections.push(`Extra goal instructions from ${job.promptFile}:\n${text.trim()}`)
+  }
+  if (job.goalAcceptance?.length) sections.push("Acceptance criteria:\n" + job.goalAcceptance.map((item, index) => `${index + 1}. ${item}`).join("\n"))
+  if (job.goalChecks?.length) sections.push("Verification commands that define useful evidence:\n" + job.goalChecks.map((item, index) => `${index + 1}. ${item}`).join("\n"))
+  if (job.verifyCommand) sections.push(`Post-turn verify command configured by the loop: ${job.verifyCommand}`)
+  if (job.lastGoalChecks?.length) sections.push("Latest goal check results:\n" + job.lastGoalChecks.map((item) => `- ${item.command}: exit ${item.code}`).join("\n"))
+  if (job.lastVerifyFailure) sections.push("Previous verify/check failure summary:\n" + String(job.lastVerifyFailure).slice(0, 1600))
+  if (job.goalProgress?.length) sections.push("Recent goal progress:\n" + job.goalProgress.slice(-5).map((item) => `- ${item.time}: ${item.summary}`).join("\n"))
+  for (const file of job.includeFiles || []) {
+    const text = await readSmallTextFile(path.resolve(directory, file), 80_000)
+    if (text.trim()) sections.push(`Context from ${file}:\n${text.trim().slice(0, 20_000)}`)
+  }
+
+  return `${GOAL_PROMPT_PREFIX}.
+
+You are pursuing an experimental persistent goal for this OpenCode session. This is not a timer loop and not a one-shot prompt. Keep working toward the goal until it is completed, blocked, paused, cleared, or stopped by safety limits.
+
+Rules:
+- Work on the next smallest useful step toward the goal.
+- Prefer direct code changes, tests, typechecks, builds, and evidence over discussion.
+- Do not claim the goal is complete unless the acceptance criteria are satisfied and verification evidence supports it.
+- When the goal is complete, call the tool opencode_loop_goal_complete with a summary and evidence.
+- If you are truly blocked and need user input, call the tool opencode_loop_goal_blocked with the reason and what is needed.
+- If you made meaningful progress but the goal is not complete, call the tool opencode_loop_goal_progress with the summary and next step.
+- Do not call completion tools just to be polite; only call them when the state is real.
+- Do not ask the user questions unless blocked; make reasonable assumptions and continue.
+- Follow safety rules: no destructive commands, force pushes, production deploys, production database resets, or deleting user data.
+
+${sections.join("\n\n---\n\n")}`
+}
+
 async function buildPrompt(directory, job) {
+  if (isGoalJob(job)) return await buildGoalPrompt(directory, job)
   const sections = []
   if (job.promptFile) {
     const text = await readSmallTextFile(path.resolve(directory, job.promptFile))
@@ -688,6 +784,7 @@ function scheduleIdleWork(directory, client, sessionID) {
 function dueJobs(state, force = false) {
   const current = now()
   return (state.jobs || []).filter((job) => {
+    if (isGoalJob(job) && ["completed", "blocked", "cleared"].includes(job.goalStatus)) return false
     if (!job.enabled || job.paused) return false
     if (job.maxRuns > 0 && (job.runCount || 0) >= job.maxRuns) return false
     if (job.maxRuntimeMs > 0 && current - Date.parse(job.createdAt || new Date().toISOString()) >= job.maxRuntimeMs) return true
@@ -701,6 +798,146 @@ function clearActiveRun(sessionID) {
   const active = activeRuns.get(sessionID)
   if (active?.timer) clearTimeout(active.timer)
   activeRuns.delete(sessionID)
+}
+
+function goalReportPath(directory, sessionID, job) {
+  return path.join(stateDir(directory), GOAL_REPORT_DIR, `${safeID(sessionID)}-${safeID(job.name || job.id)}.md`)
+}
+
+function goalReportText(job) {
+  const lines = []
+  lines.push(`# OpenCode Loop Goal Report`)
+  lines.push("")
+  lines.push(`Status: ${goalStatusText(job) || "unknown"}`)
+  lines.push(`Goal: ${job.action || job.goalFile || ""}`)
+  lines.push(`Created: ${job.createdAt || ""}`)
+  if (job.goalCompletedAt) lines.push(`Completed: ${new Date(job.goalCompletedAt).toISOString()}`)
+  if (job.goalBlockedAt) lines.push(`Blocked: ${new Date(job.goalBlockedAt).toISOString()}`)
+  if (job.runCount) lines.push(`Turns: ${job.runCount}`)
+  lines.push("")
+  if (job.goalSummary) lines.push("## Summary", "", String(job.goalSummary), "")
+  if (job.goalEvidence) lines.push("## Evidence", "", String(job.goalEvidence), "")
+  if (job.goalBlockedReason) lines.push("## Blocked reason", "", String(job.goalBlockedReason), "")
+  if (job.goalAcceptance?.length) lines.push("## Acceptance criteria", "", ...job.goalAcceptance.map((item) => `- ${item}`), "")
+  if (job.lastGoalChecks?.length) {
+    lines.push("## Latest checks", "")
+    for (const item of job.lastGoalChecks) lines.push(`- ${item.command}: exit ${item.code}`)
+    lines.push("")
+  }
+  if (job.goalProgress?.length) {
+    lines.push("## Progress", "")
+    for (const item of job.goalProgress) lines.push(`- ${item.time}: ${item.summary}${item.next ? ` Next: ${item.next}` : ""}`)
+    lines.push("")
+  }
+  return lines.join("\n")
+}
+
+async function writeGoalReport(directory, sessionID, job) {
+  if (!isGoalJob(job)) return
+  const target = job.goalEvidenceFile ? path.resolve(directory, job.goalEvidenceFile) : goalReportPath(directory, sessionID, job)
+  await ensureDir(path.dirname(target))
+  await fs.writeFile(target, goalReportText(job), "utf8")
+}
+
+function pickGoalJob(state, target = "") {
+  const goals = (state.jobs || []).filter(isGoalJob)
+  if (!goals.length) return undefined
+  const text = String(target || "").trim()
+  if (!text || ["active", "current", "goal"].includes(text.toLowerCase())) return goals.find((job) => job.goalStatus === "active" && job.enabled !== false) || goals[0]
+  return goals.find((job, index) => matchJob(job, text, index))
+}
+
+function parseGoalToolText(args, fields) {
+  const result = {}
+  for (const field of fields) result[field] = String(args?.[field] || "").trim()
+  return result
+}
+
+async function setGoalComplete(directory, sessionID, args = {}) {
+  const state = await readState(directory, sessionID)
+  const job = pickGoalJob(state, args.target)
+  if (!job) return { ok: false, message: "No active experimental goal was found." }
+  const parsed = parseGoalToolText(args, ["summary", "evidence"])
+  job.goalStatus = "completed"
+  job.enabled = false
+  job.paused = true
+  job.goalCompletedAt = now()
+  job.goalSummary = parsed.summary || job.goalSummary || "Goal completed."
+  job.goalEvidence = parsed.evidence || job.goalEvidence || "No evidence provided."
+  state.jobs = (state.jobs || []).map((candidate) => candidate.id === job.id ? job : candidate)
+  await writeState(directory, sessionID, state)
+  await writeGoalReport(directory, sessionID, job)
+  await appendLoopLog(directory, "goal-complete", { sessionID, job: job.name || job.id, summary: job.goalSummary })
+  return { ok: true, job, message: `Goal completed: ${job.goalSummary}` }
+}
+
+async function setGoalBlocked(directory, sessionID, args = {}) {
+  const state = await readState(directory, sessionID)
+  const job = pickGoalJob(state, args.target)
+  if (!job) return { ok: false, message: "No active experimental goal was found." }
+  const parsed = parseGoalToolText(args, ["reason", "needed", "evidence"])
+  job.goalStatus = "blocked"
+  job.enabled = false
+  job.paused = true
+  job.goalBlockedAt = now()
+  job.goalBlockedReason = [parsed.reason, parsed.needed ? `Needed: ${parsed.needed}` : ""].filter(Boolean).join("\n") || "Goal blocked."
+  if (parsed.evidence) job.goalEvidence = parsed.evidence
+  state.jobs = (state.jobs || []).map((candidate) => candidate.id === job.id ? job : candidate)
+  await writeState(directory, sessionID, state)
+  await writeGoalReport(directory, sessionID, job)
+  await appendLoopLog(directory, "goal-blocked", { sessionID, job: job.name || job.id, reason: job.goalBlockedReason })
+  return { ok: true, job, message: `Goal blocked: ${job.goalBlockedReason}` }
+}
+
+async function setGoalProgress(directory, sessionID, args = {}) {
+  const state = await readState(directory, sessionID)
+  const job = pickGoalJob(state, args.target)
+  if (!job) return { ok: false, message: "No active experimental goal was found." }
+  const parsed = parseGoalToolText(args, ["summary", "next", "evidence"])
+  const item = { time: new Date().toISOString(), summary: parsed.summary || "Progress recorded.", next: parsed.next || "", evidence: parsed.evidence || "" }
+  job.goalProgress = [...(job.goalProgress || []), item].slice(-30)
+  if (parsed.evidence) job.goalEvidence = parsed.evidence
+  state.jobs = (state.jobs || []).map((candidate) => candidate.id === job.id ? job : candidate)
+  await writeState(directory, sessionID, state)
+  await writeGoalReport(directory, sessionID, job)
+  await appendLoopLog(directory, "goal-progress", { sessionID, job: job.name || job.id, summary: item.summary })
+  return { ok: true, job, message: `Goal progress recorded: ${item.summary}` }
+}
+
+async function runGoalChecks(directory, sessionID, job, client) {
+  if (!isGoalJob(job) || !job.goalChecks?.length || ["completed", "blocked"].includes(job.goalStatus)) return job
+  const results = []
+  for (const command of job.goalChecks) {
+    if (job.safe && dangerousShell(command)) {
+      results.push({ command, code: -1, output: "Blocked dangerous command in safe mode." })
+      continue
+    }
+    const result = await runShellCommand(command, directory, job.timeoutMs || 300_000)
+    results.push({ command, code: result.code, output: (result.stdout + "\n" + result.stderr).slice(0, 1200) })
+  }
+  job.lastGoalCheckAt = now()
+  job.lastGoalChecks = results
+  const allPassed = results.length > 0 && results.every((item) => item.code === 0)
+  if (allPassed) {
+    job.goalChecksPassedAt = now()
+    job.failureCount = 0
+    await toast(client, "Goal checks passed.", "success")
+    if (job.goalCompleteWhenChecksPass) {
+      job.goalStatus = "completed"
+      job.enabled = false
+      job.paused = true
+      job.goalCompletedAt = now()
+      job.goalSummary = job.goalSummary || "All configured goal checks passed."
+      job.goalEvidence = results.map((item) => `${item.command}: exit ${item.code}`).join("\n")
+      await appendLoopLog(directory, "goal-auto-complete", { sessionID, job: job.name || job.id })
+    }
+  } else {
+    job.failureCount = (job.failureCount || 0) + 1
+    job.lastVerifyFailure = results.map((item) => `${item.command}\nexit=${item.code}\n${item.output}`).join("\n\n").slice(0, 4000)
+    await toast(client, "Goal checks still failing; goal will continue on next idle turn.", "warning")
+  }
+  await appendLoopLog(directory, "goal-checks", { sessionID, job: job.name || job.id, results: results.map((item) => ({ command: item.command, code: item.code })) })
+  return job
 }
 
 async function finalizeActiveRun(directory, client, sessionID) {
@@ -750,8 +987,10 @@ async function finalizeActiveRun(directory, client, sessionID) {
     }
   }
 
-  state.jobs = (state.jobs || []).map((candidate) => candidate.id === job.id ? job : candidate).filter((candidate) => candidate.enabled !== false)
+  if (isGoalJob(job)) job = await runGoalChecks(directory, sessionID, job, client)
+  state.jobs = (state.jobs || []).map((candidate) => candidate.id === job.id ? job : candidate).filter((candidate) => candidate.enabled !== false || isGoalJob(candidate))
   await writeState(directory, sessionID, state)
+  if (isGoalJob(job)) await writeGoalReport(directory, sessionID, job)
   await createCheckpoint(directory, sessionID, job, client)
 }
 
@@ -788,7 +1027,14 @@ async function fireAction(directory, client, sessionID, job) {
     return { startsAssistantTurn: true }
   }
   const prompt = await buildPrompt(directory, job)
-  fireSdk(client, "session.prompt", client.session.prompt.bind(client.session), { sessionID, parts: [{ type: "text", text: `AUTONOMOUS OPENCODE LOOP ITERATION. Continue the configured task now. Do not explain the /loop command. Do not search for documentation about this plugin. Do not create scheduler files. Do not ask questions. Make reasonable assumptions and work directly.\n\n${prompt}` }] }, { path: { id: sessionID }, body: { parts: [{ type: "text", text: `AUTONOMOUS OPENCODE LOOP ITERATION. Continue the configured task now. Do not explain the /loop command. Do not search for documentation about this plugin. Do not create scheduler files. Do not ask questions. Make reasonable assumptions and work directly.\n\n${prompt}` }] } })
+  const prefix = kind === "goal"
+    ? "EXPERIMENTAL GOAL MODE CONTINUATION. Continue pursuing the active goal. Do not explain the /loop-goal command. Use the goal tools only when progress/completion/block state is real."
+    : "AUTONOMOUS OPENCODE LOOP ITERATION. Continue the configured task now. Do not explain the /loop command. Do not search for documentation about this plugin. Do not create scheduler files. Do not ask questions. Make reasonable assumptions and work directly."
+  fireSdk(client, "session.prompt", client.session.prompt.bind(client.session), { sessionID, parts: [{ type: "text", text: `${prefix}
+
+${prompt}` }] }, { path: { id: sessionID }, body: { parts: [{ type: "text", text: `${prefix}
+
+${prompt}` }] } })
   return { startsAssistantTurn: true }
 }
 
@@ -870,7 +1116,7 @@ async function maybeRunDueJobs(directory, client, sessionID, options = {}) {
     const result = await fireAction(directory, client, sessionID, job)
     if (!result.startsAssistantTurn) {
       const fresh = await readState(directory, sessionID)
-      fresh.jobs = (fresh.jobs || []).filter((candidate) => candidate.enabled !== false)
+      fresh.jobs = (fresh.jobs || []).filter((candidate) => candidate.enabled !== false || isGoalJob(candidate))
       await writeState(directory, sessionID, fresh)
     }
     if (result.startsAssistantTurn) {
@@ -949,12 +1195,81 @@ async function updateJobState(directory, client, sessionID, args, updater, messa
   await toast(client, `${message}: ${count} loop(s).`, count ? "success" : "warning")
 }
 
+async function statusGoal(directory, client, sessionID) {
+  const state = await readState(directory, sessionID)
+  const goals = (state.jobs || []).filter(isGoalJob)
+  const lines = goals.length ? goals.map((job, index) => {
+    const status = goalStatusText(job)
+    const checks = job.goalChecks?.length ? ` | checks=${job.goalChecks.length}` : ""
+    const acceptance = job.goalAcceptance?.length ? ` | acceptance=${job.goalAcceptance.length}` : ""
+    const progress = job.goalProgress?.length ? ` | progress=${job.goalProgress.length}` : ""
+    return `${index + 1}. ${job.id}${job.name ? ` (${job.name})` : ""}: ${status} | turns=${job.runCount || 0} | objective=${String(job.action || job.goalFile || "").slice(0, 220)}${checks}${acceptance}${progress}`
+  }) : ["No experimental goal jobs."]
+  await toast(client, goals.length ? `${goals.length} experimental goal(s).` : "No experimental goal jobs.", goals.length ? "info" : "warning")
+  await say(client, sessionID, "OpenCode Loop experimental goal status:\n" + lines.join("\n"))
+}
+
+async function pauseGoal(directory, client, sessionID, args) {
+  const target = String(args || "").trim() || "goal"
+  const state = await readState(directory, sessionID)
+  let count = 0
+  state.jobs = (state.jobs || []).map((job, index) => isGoalJob(job) && matchJob(job, target, index) ? (count++, { ...job, paused: true }) : job)
+  await writeState(directory, sessionID, state)
+  await toast(client, `Paused ${count} experimental goal(s).`, count ? "success" : "warning")
+}
+
+async function resumeGoal(directory, client, sessionID, args) {
+  const target = String(args || "").trim() || "goal"
+  const state = await readState(directory, sessionID)
+  let count = 0
+  state.jobs = (state.jobs || []).map((job, index) => {
+    if (!isGoalJob(job) || !matchJob(job, target, index)) return job
+    count++
+    return { ...job, paused: false, enabled: true, goalStatus: job.goalStatus === "blocked" ? "active" : (job.goalStatus || "active"), lastRunAt: 0 }
+  })
+  await writeState(directory, sessionID, state)
+  await toast(client, `Resumed ${count} experimental goal(s).`, count ? "success" : "warning")
+  if (count) scheduleIdleWork(directory, client, sessionID)
+}
+
+async function clearGoal(directory, client, sessionID, args) {
+  const target = String(args || "").trim()
+  const state = await readState(directory, sessionID)
+  const before = state.jobs.length
+  state.jobs = (state.jobs || []).filter((job, index) => !isGoalJob(job) || (target && !matchJob(job, target, index)))
+  await writeState(directory, sessionID, state)
+  await toast(client, `Cleared ${before - state.jobs.length} experimental goal(s).`, before !== state.jobs.length ? "success" : "warning")
+}
+
+async function completeGoalCommand(directory, client, sessionID, args) {
+  const result = await setGoalComplete(directory, sessionID, { summary: String(args || "").trim() || "Goal manually marked complete.", evidence: "Marked complete by /loop-goal-done." })
+  await toast(client, result.message, result.ok ? "success" : "warning")
+}
+
+async function blockGoalCommand(directory, client, sessionID, args) {
+  const result = await setGoalBlocked(directory, sessionID, { reason: String(args || "").trim() || "Goal manually marked blocked.", needed: "User input or manual intervention." })
+  await toast(client, result.message, result.ok ? "warning" : "warning")
+}
+
+async function addGoal(directory, client, sessionID, args) {
+  const text = String(args || "").trim()
+  const [maybeCommand, rest] = splitFirst(text)
+  const sub = maybeCommand.toLowerCase()
+  if (!text || sub === "status") return await statusGoal(directory, client, sessionID)
+  if (sub === "pause") return await pauseGoal(directory, client, sessionID, rest)
+  if (sub === "resume") return await resumeGoal(directory, client, sessionID, rest)
+  if (["clear", "remove", "stop"].includes(sub)) return await clearGoal(directory, client, sessionID, rest)
+  if (["done", "complete", "completed"].includes(sub)) return await completeGoalCommand(directory, client, sessionID, rest)
+  if (["blocked", "block"].includes(sub)) return await blockGoalCommand(directory, client, sessionID, rest)
+  return await addLoop(directory, client, sessionID, text, { intervalMs: 0, kind: "goal", name: "goal", immediate: true, safe: true, askNever: true, noOverlap: true, goalStatus: "active" })
+}
+
 async function statusLoop(directory, client, sessionID) {
   const state = await readState(directory, sessionID)
   const jobs = state.jobs || []
   const lines = jobs.length ? jobs.map((job, index) => {
     const dueIn = Math.max(0, job.intervalMs - (now() - (job.lastRunAt || 0)))
-    const flags = [job.paused ? "paused" : "active", job.safe ? "safe" : undefined, job.askNever ? "ask-never" : undefined, job.noOverlap ? "no-overlap" : undefined, job.checkpointOnly ? "checkpoint-only" : undefined, job.gitCheckpoint ? "git-checkpoint" : undefined].filter(Boolean).join(",")
+    const flags = [isGoalJob(job) ? `goal:${goalStatusText(job)}` : undefined, job.paused ? "paused" : "active", job.safe ? "safe" : undefined, job.askNever ? "ask-never" : undefined, job.noOverlap ? "no-overlap" : undefined, job.checkpointOnly ? "checkpoint-only" : undefined, job.gitCheckpoint ? "git-checkpoint" : undefined].filter(Boolean).join(",")
     return `${index + 1}. ${job.id}${job.name ? ` (${job.name})` : ""}: ${jobLabel(job)} | runs=${job.runCount || 0} | failures=${job.failureCount || 0} | due in ${durationToText(dueIn)} | ${flags}`
   }) : ["No active loop jobs."]
   await toast(client, jobs.length ? `${jobs.length} loop job(s).` : "No active loop jobs.", jobs.length ? "info" : "warning")
@@ -975,6 +1290,9 @@ async function helpLoop(client, sessionID) {
     "/loop-command 200m /compact                       OpenCode slash-command loop, waits for idle",
     "/loop-ask 1h did you run tests and tsc --noEmit?   scheduled question/check prompt",
     "/loop-shell 10m npm test                           shell loop, waits for idle",
+    "/loop-goal finish the feature and keep tests green  experimental persistent goal mode",
+    "/loop-goal --check \"npm run build\" --check \"npm test\" --complete-when-checks-pass ship it",
+    "/loop-goal status | pause | resume | clear          manage experimental goals",
     "/loop 200m --command /compact                     same as command loop",
     "/loop 0s --verify \"npm test\" <prompt>            verify after each assistant turn",
     "/loop 0s --prompt-file loop-prompt.md             load prompt from a file",
@@ -1004,6 +1322,7 @@ async function doctorLoop(directory, client, sessionID) {
     `- node: ${process.version}`,
     `- platform: ${process.platform}`,
     "- smoke test: /loop 0s --max-runs 1 --dry-run continue from progress.md",
+    "- experimental goal smoke test: /loop-goal --dry-run finish the current task and verify it",
   ].join("\n"))
 }
 
@@ -1037,6 +1356,13 @@ async function handleCommand(directory, client, input, fallbackName, fallbackArg
     return true
   }
 
+  if (name === "loop-goal") return await addGoal(directory, client, sessionID, args), handled()
+  if (name === "loop-goal-status") return await statusGoal(directory, client, sessionID), handled()
+  if (name === "loop-goal-pause") return await pauseGoal(directory, client, sessionID, args), handled()
+  if (name === "loop-goal-resume") return await resumeGoal(directory, client, sessionID, args), handled()
+  if (name === "loop-goal-clear") return await clearGoal(directory, client, sessionID, args), handled()
+  if (name === "loop-goal-done" || name === "loop-goal-complete") return await completeGoalCommand(directory, client, sessionID, args), handled()
+  if (name === "loop-goal-blocked") return await blockGoalCommand(directory, client, sessionID, args), handled()
   if (name === "loop") return await addLoop(directory, client, sessionID, args), handled()
   if (isPreset(name)) return await addLoop(directory, client, sessionID, args, presetDefaults(name, args)), handled()
   if (name === "loop-stop" || name === "loop-remove") return await stopLoop(directory, client, sessionID, args), handled()
@@ -1054,9 +1380,48 @@ async function handleCommand(directory, client, input, fallbackName, fallbackArg
   return false
 }
 
+function goalTools(defaultDirectory) {
+  return {
+    opencode_loop_goal_complete: {
+      description: "Mark the current OpenCode Loop experimental goal as completed. Use only after acceptance criteria are satisfied and you have evidence from tests, typecheck, build, or code inspection.",
+      args: {
+        summary: { type: "string", description: "Short human-readable summary of what was completed." },
+        evidence: { type: "string", description: "Concrete evidence that the goal is complete, such as commands run, passing checks, files changed, and important results." },
+      },
+      execute: async (args, context) => {
+        const result = await setGoalComplete(context.directory || defaultDirectory, context.sessionID, args)
+        return { title: result.ok ? "Goal completed" : "Goal not found", output: result.message }
+      },
+    },
+    opencode_loop_goal_blocked: {
+      description: "Mark the current OpenCode Loop experimental goal as blocked when user input or manual intervention is required.",
+      args: {
+        reason: { type: "string", description: "Why the goal is blocked." },
+        needed: { type: "string", description: "What user input, credential, decision, or manual action is needed to continue." },
+      },
+      execute: async (args, context) => {
+        const result = await setGoalBlocked(context.directory || defaultDirectory, context.sessionID, args)
+        return { title: result.ok ? "Goal blocked" : "Goal not found", output: result.message }
+      },
+    },
+    opencode_loop_goal_progress: {
+      description: "Record meaningful progress on the current OpenCode Loop experimental goal without completing it.",
+      args: {
+        summary: { type: "string", description: "What useful progress was made." },
+        next: { type: "string", description: "The next step toward completing the goal." },
+      },
+      execute: async (args, context) => {
+        const result = await setGoalProgress(context.directory || defaultDirectory, context.sessionID, args)
+        return { title: result.ok ? "Goal progress" : "Goal not found", output: result.message }
+      },
+    },
+  }
+}
+
 export const OpenCodeLoopPlugin = async ({ client, directory }) => {
   await log(client, "info", "Plugin initialized", { directory })
   return {
+    tool: goalTools(directory),
     "command.execute.before": async (input, output) => { await handleCommand(directory, client, input, undefined, undefined, output) },
     event: async ({ event }) => {
       if (event.type === "command.executed") {

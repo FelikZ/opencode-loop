@@ -11,7 +11,7 @@ NPM package name: **@bybrawe/opencode-loop**
 
 ## Current status
 
-**v0.5.6 fixes the recent OpenCode update compatibility issue and adds clear loop action types.** OpenCode Loop has been updated for the current OpenCode SDK/TUI call shape and idle/status behavior. The TUI loop waits for the session to become idle, debounces idle events, and avoids starting a new run while OpenCode is still busy or queued. It now separates prompt loops, scheduled question loops, OpenCode slash-command loops, shell loops, and compact loops so commands like `/compact` are not sent as normal chat text.
+**v0.5.7 adds experimental Goal Mode.** OpenCode Loop still fixes the recent OpenCode update compatibility issue and keeps the clear action types from v0.5.6. The TUI loop waits for the session to become idle, debounces idle events, and avoids starting a new run while OpenCode is still busy or queued. It separates prompt loops, scheduled question loops, OpenCode slash-command loops, shell loops, compact loops, and now experimental persistent goals so commands like `/compact` are not sent as normal chat text.
 
 The known update-related symptoms from older builds are fixed:
 
@@ -21,6 +21,7 @@ The known update-related symptoms from older builds are fixed:
 - prompt, shell, or toast calls silently fail after OpenCode SDK changes
 - `/compact` accidentally being treated as a normal agent prompt
 - intermittent `Tool execution aborted` behavior caused by triggering a new turn too early
+- experimental `/loop-goal` support for goal-driven work that continues until complete, blocked, paused, or cleared
 
 The TUI loop is still intentionally session-bound: it runs while OpenCode is open and the current session emits status/idle events. For long-running background work after closing the terminal or OpenCode, use `opencode-loopd`.
 
@@ -85,6 +86,7 @@ OpenCode Loop is designed for developers searching for:
 - **Branch setup** with `--branch ai-loop`.
 - **Stop controls** with `--stop-file STOP_LOOP`, `--until`, `/loop-stop`, `/loop-pause`, `/loop-resume`, and `/loop-remove`.
 - **Watch mode** with `--watch progress.md`.
+- **Experimental Goal Mode** with `/loop-goal`, goal status, goal tools, acceptance criteria, and verification checks.
 - **Diagnostics** with `/loop-doctor`.
 - **Starter progress file** with `/loop-init`.
 - **State export** with `/loop-export`.
@@ -264,7 +266,7 @@ If the commands do not appear:
 
 ## Quick start
 
-### The 5 examples most people need
+### The 6 examples most people need
 
 Auto-continue every time OpenCode finishes a turn:
 
@@ -300,6 +302,12 @@ Run a real shell command every 10 minutes when idle:
 
 ```text
 /loop-shell 10m npm test
+```
+
+Experimental goal mode: keep working until the objective is actually done, blocked, paused, or cleared:
+
+```text
+/loop-goal finish the feature, run tsc --noEmit and build, fix every error, and stop only when everything passes
 ```
 
 ### What “when idle” means
@@ -339,6 +347,89 @@ That can look like a chat prompt in older versions or unclear setups. Prefer `/l
 ```text
 /loop-compact 200m
 ```
+
+### Experimental Goal Mode
+
+Goal Mode is experimental. Use it when you do **not** want a timer such as “every 5 minutes”. Use it when you want OpenCode to keep pursuing a result until it is complete or blocked.
+
+Basic goal:
+
+```text
+/loop-goal fix the TypeScript build errors. Run tsc --noEmit and npm run build. Stop only when both pass.
+```
+
+What happens:
+
+1. The goal is saved as the active experimental goal.
+2. OpenCode starts working immediately by default.
+3. When OpenCode becomes idle, the plugin checks whether the goal is still active.
+4. If the goal is not complete or blocked, the plugin injects the next Goal Mode continuation prompt.
+5. The agent is instructed to call a local goal tool when it has real progress, completion evidence, or a blocked reason.
+
+Goal Mode is idle-safe. If OpenCode is busy, it waits. It does not intentionally start another turn on top of a running turn.
+
+Simple status and control commands:
+
+```text
+/loop-goal-status
+/loop-goal-pause
+/loop-goal-resume
+/loop-goal-clear
+```
+
+You can also use subcommands through `/loop-goal`:
+
+```text
+/loop-goal status
+/loop-goal pause
+/loop-goal resume
+/loop-goal clear
+```
+
+Manual completion or blocked state:
+
+```text
+/loop-goal-done shipped the feature and all checks pass
+/loop-goal-blocked missing API key for the staging provider
+```
+
+Goal with acceptance criteria:
+
+```text
+/loop-goal --acceptance "tsc --noEmit passes" --acceptance "npm run build passes" --acceptance "no new TODO hacks" fix all build errors
+```
+
+Goal with automatic check commands after each assistant turn:
+
+```text
+/loop-goal --check "npm run typecheck" --check "npm run build" fix every TypeScript and build error
+```
+
+Goal that automatically stops when all configured checks pass:
+
+```text
+/loop-goal --check "npm run typecheck" --check "npm run build" --complete-when-checks-pass make the project build cleanly
+```
+
+Goal with a safety/runtime limit:
+
+```text
+/loop-goal --max-turns 20 --max-runtime 3h --check "npm test" fix the failing tests without destructive commands
+```
+
+Goal Mode writes a report under:
+
+```text
+.opencode/opencode-loop/goals/
+```
+
+You can choose a report file:
+
+```text
+/loop-goal --evidence-file goal-report.md --check "npm test" make tests pass and document the result
+```
+
+Goal Mode is inspired by persistent-objective workflows such as Codex `/goal`, but this package implements it at the OpenCode plugin layer. It is intentionally marked experimental because model tool-calling behavior and OpenCode plugin APIs may change.
 
 ### Safer development loop
 
@@ -453,6 +544,13 @@ Use `--name` to manage separate named loops, or `--multi` when you intentionally
 | `/loop-ask <interval> <prompt/question>` | Schedule a recurring question/check prompt; first run waits for the interval by default |
 | `/loop-prompt <interval> <prompt>` | Force prompt mode, even when you want explicit prompt-loop naming |
 | `/loop-shell <interval> <shell-command>` | Schedule a shell command loop |
+| `/loop-goal <objective>` | Start experimental persistent Goal Mode |
+| `/loop-goal-status` | Show experimental goal state |
+| `/loop-goal-pause` | Pause the active experimental goal |
+| `/loop-goal-resume` | Resume the active experimental goal |
+| `/loop-goal-clear` | Clear experimental goals |
+| `/loop-goal-done <summary>` | Manually mark the active goal complete |
+| `/loop-goal-blocked <reason>` | Manually mark the active goal blocked |
 | `/loop-help` | Show usage help inside OpenCode |
 | `/loop-status` | Show active loop jobs |
 | `/loop-logs` | Show recent loop log entries |
@@ -499,6 +597,7 @@ OpenCode Loop has separate types for prompts, OpenCode slash commands, and shell
 | Scheduled question | Ask/check on a timer | `/loop-ask 1h did you run tests and build?` | After the interval by default |
 | Slash-command loop | Run OpenCode commands like `/compact` | `/loop-command 200m /compact` | After the interval by default |
 | Shell loop | Run real terminal commands | `/loop-shell 10m npm test` | After the interval by default |
+| Experimental goal | Keep pursuing an outcome until complete/blocked | `/loop-goal make build pass` | Now by default |
 
 You can still force the type on `/loop`:
 
@@ -956,6 +1055,14 @@ Improve the application in small safe steps.
 ```
 
 ## Changelog highlights
+
+### v0.5.7
+
+- Added experimental Goal Mode with `/loop-goal <objective>`.
+- Added goal lifecycle commands and local goal tools so the agent can report real progress, completion evidence, or blocked state.
+- Added repeated `--acceptance`, `--success`, and `--check` flags for goal criteria and verification.
+- Added `--complete-when-checks-pass`, `--max-turns`, and `--evidence-file` for controlled goal workflows.
+- Goal reports are written under `.opencode/opencode-loop/goals/` by default.
 
 ### v0.5.6
 
