@@ -1140,7 +1140,7 @@ async function finalizeActiveRun(directory, client, sessionID) {
   if (!active) return
   clearActiveRun(sessionID)
   const state = await readState(directory, sessionID)
-  const job = (state.jobs || []).find((candidate) => candidate.id === active.jobId)
+  let job = (state.jobs || []).find((candidate) => candidate.id === active.jobId)
   if (!job) return
   job.lastFinishedAt = now()
 
