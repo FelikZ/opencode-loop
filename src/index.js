@@ -1,9 +1,11 @@
 import { promises as fs } from "node:fs"
 import path from "node:path"
+import os from "node:os"
+import { createHash } from "node:crypto"
 import { spawn } from "node:child_process"
 
 const SERVICE = "opencode-loop"
-const STATE_DIR = ".opencode/opencode-loop"
+const STATE_BASE = path.join(os.homedir(), ".local", "state", "opencode-loop")
 const DEFAULT_ACTIVE_GUARD_MS = 45_000
 const STALE_ACTIVE_RECOVERY_MS = 45_000
 const IDLE_DEBOUNCE_MS = 1_200
@@ -314,7 +316,10 @@ function parseLoopArgs(raw, defaults = {}) {
   return { ok: true, job }
 }
 
-function stateDir(directory) { return path.join(directory, STATE_DIR) }
+function stateDir(directory) {
+  const id = createHash("md5").update(directory).digest("hex").slice(0, 12)
+  return path.join(STATE_BASE, id)
+}
 function statePath(directory, sessionID) { return path.join(stateDir(directory), `${safeID(sessionID)}.json`) }
 async function ensureDir(directory) { await fs.mkdir(directory, { recursive: true }) }
 async function pathExists(filePath) { try { await fs.access(filePath); return true } catch { return false } }
@@ -738,7 +743,7 @@ async function fileContains(filePath, needle) {
 
 async function untilReached(directory, job) {
   if (!job.until) return false
-  const files = ["progress.md", "PROGRESS.md", "todo.md", "TODO.md", "todolist.md", "TODOLIST.md", path.join(".opencode", "opencode-loop", "until.txt")]
+  const files = ["progress.md", "PROGRESS.md", "todo.md", "TODO.md", "todolist.md", "TODOLIST.md", path.join(stateDir(directory), "until.txt")]
   for (const file of files) if (await fileContains(path.resolve(directory, file), job.until)) return true
   let scanned = 0
   async function walk(current) {
